@@ -4,6 +4,8 @@
 
 構想と受け入れ条件は [MVP 要件定義書](docs/01_構想.md) を参照。
 
+Discord サーバー内で会話する AI 向けの背景説明は [会話 AI 用 README](docs/discord-ai/README.md)、振る舞いの指針は [会話 AI 用 AGENTS.md](docs/discord-ai/AGENTS.md) を参照。開発用の文書とは分けて管理する。現時点では文書の初稿であり、Bot による読み込みは未実装。
+
 ## Java とビルドの前提
 
 Java 21 を使用する。CI は参照元に合わせて Maven を採用し、リポジトリ直下の `pom.xml` に対して次を実行する。
