@@ -130,7 +130,7 @@ VPS の既存 EnvironmentFile から Bot トークンを読み、Discord REST AP
 
 定義だけの先行登録では稼働中の Bot の処理は変わらない。`limit` の実行には、この変更を含む JAR のデプロイと再起動も必要。Discord 上での登録・表示・公開返信は別途実機確認する。
 
-### Codex連携による利用枠照会（試行・既定OFF）
+### Codex連携による利用枠照会（試行・設定例ではON）
 
 `CODEX_USAGE_ENABLED=true` の場合、従来の応答ヘッダー表示に代えて、専用のCodex App Serverへ `account/rateLimits/read` を送る。BotのSIWC接続は維持し、Codex側には別途同じアカウントでログインする。SIWCトークンをCodexへ流用せず、デスクトップの既存認証ファイルも自動探索しない。設定と検証手順は [利用枠照会の試行](docs/03_Codex利用枠照会.md) を参照。
 

@@ -12,7 +12,7 @@ chatgpt.request.timeout.seconds=180
 # Prefer /gvd accept role:@role; this is only an optional initial value.
 discord.ai.role.id=
 # Experimental quota lookup (Codex must be logged in separately with the Bot account).
-codex.usage.enabled=false
+codex.usage.enabled=true
 codex.usage.executable=/usr/local/bin/codex
 codex.usage.home=/var/lib/chatgptviadiscord/codex-usage
 codex.usage.timeout.seconds=20
