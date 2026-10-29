@@ -21,7 +21,8 @@ class AiConversationTest {
         when(h.messageEvent.getMember()).thenReturn(member);when(h.guild.getMemberById(user)).thenReturn(member);
         when(h.message.getId()).thenReturn(id);when(h.message.getContentRaw()).thenReturn(content);
         var mentions=mock(net.dv8tion.jda.api.entities.Mentions.class);when(mentions.getRoles()).thenReturn(List.of());when(h.message.getMentions()).thenReturn(mentions);
-        when(h.message.reply(anyString())).thenReturn(h.reply);return h;
+        when(h.message.reply(anyString())).thenReturn(h.reply);
+        ServerModelContextTest.documents(h.guild);return h;
     }
     void account(ChatGptAccounts accounts) throws Exception {
         var a=new ChatGptAccounts.Account();a.clientId="oaiapp_shared";a.subject="owner";a.accessToken="access";a.refreshToken="refresh";
@@ -69,6 +70,7 @@ class AiConversationTest {
                 assertEquals(1,settings.characters().size());
             }
             assertEquals(1,created.get());assertEquals(2,calls.get());
+            assertTrue(prompt.get().contains("server background"));assertTrue(prompt.get().contains("server guidance"));
             assertTrue(prompt.get().contains("先頭レス番号: 2"));assertTrue(prompt.get().contains("今回メンションされたキャラ名: [\"案内人\"]"));
             String key=ChannelControlsTest.CHANNEL+"-"+UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
             var saved=new ChatHistory(directory.resolve("history")).load(key);
@@ -120,6 +122,21 @@ class AiConversationTest {
                 new GvdListener(h.controls,ai).onMessageReceived(h.messageEvent);
                 verify(h.message,never()).getContentRaw();verifyNoInteractions(transport);verify(h.message,never()).reply(anyString());
             }
+        }
+    }
+
+    @Test void missingServerDocumentNeverCallsModelOrSavesHistory() throws Exception {
+        var transport=mock(OpenAiTransport.class);
+        try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)){
+            account(accounts);var h=event(USER,true,"1","question");
+            when(h.guild.getTextChannelsByName("agents",false)).thenReturn(List.of());
+            var done=new CountDownLatch(1);doAnswer(i->{done.countDown();return null;}).when(h.reply).queue(any(),any());
+            try(var ai=new AiConversation(new AiAccess(directory,ROLE),h.controls,session,transport,new ResponseSettings(directory.resolve("response.properties")),new ChatHistory(directory.resolve("history")),"guide")){
+                ai.accept(h.messageEvent);assertTrue(done.await(5,TimeUnit.SECONDS));
+            }
+            verify(transport,never()).respond(anyString(),anyString(),anyString(),anyList());
+            verify(h.message).reply(contains("#agents"));
+            assertFalse(java.nio.file.Files.exists(directory.resolve("history")));
         }
     }
 }

@@ -47,7 +47,7 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
             var input=new ArrayList<>(saved.turns);input.add(Map.of("role","user","content",content));
             message.addReaction(Emoji.fromUnicode("👀")).queue(ignored->{},error->{});
             var context=ResponseContext.prepare(settings,event.getChannel().getId(),message.getMentions().getRoles().stream().map(r->r.getId()).collect(java.util.stream.Collectors.toSet()));
-            String prompt=instructions+"\n"+context.instructions()+"\n利用できるのは渡された直近の会話だけです。Web閲覧・記憶検索・外部操作ツールはありません。";
+            String prompt=instructions+ServerModelContext.load(event.getGuild())+"\n"+context.instructions()+"\n利用できるのは渡されたサーバー管理文書と直近の会話だけです。Web閲覧・記憶検索・外部操作ツールはありません。";
             prompt+=CharacterReply.instructions(context,saved.nextPost);
             String response=transport.respond(account.accessToken,account.model,prompt,input);
             if(!session.isCurrent(event.getGuild().getId(),account)||!access.permits(event.getGuild().getMemberById(user))||!controls.shouldRespond(event.getGuild().getId(),event.getChannel().getId(),parent,false,false,message.getType()))return;
@@ -76,7 +76,8 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
             history.save(key,saved);
             if(generated==null)reply(message,response);
             else ThreadReplySender.send(message,generated,firstPost,roles,saved,()->history.save(key,saved));
-        }catch(ChatGptException error){error.log();reply(message,error.userMessage());}
+        }catch(ServerModelContext.Unavailable error){reply(message,error.getMessage());}
+        catch(ChatGptException error){error.log();reply(message,error.userMessage());}
         catch(Exception error){System.err.println("GVD_AI_FAILED error_type="+error.getClass().getSimpleName());reply(message,"応答または会話の保存を完了できませんでした。時間を置いて再投稿してください。自動再試行はしていません。");}
     }
     private static void reply(Message message,String text){
