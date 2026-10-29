@@ -26,6 +26,7 @@ class BotConfigTest {
         assertEquals("environment-token", config.token());
         assertEquals(GUILD, config.guildId());
         assertEquals(Duration.ofSeconds(60), config.startupTimeout());
+        assertEquals(Path.of("state"), config.stateDirectory());
         assertFalse(config.toString().contains("environment-token"));
         assertFalse(config.toString().contains("file-token"));
     }
@@ -69,5 +70,10 @@ class BotConfigTest {
         environment.put("BOT_STATE_DIRECTORY", directory.resolve("persistent").toString());
         assertEquals(directory.resolve("persistent"), BotConfig.load(environment, file).stateDirectory());
         assertEquals(Path.of("file-state").toAbsolutePath().normalize(), BotConfig.load(defaults, file).stateDirectory());
+    }
+    @Test void stateDirectoryCanBeConfiguredOutsideTheRelease() throws Exception {
+        var config = BotConfig.load(Map.of("DISCORD_BOT_TOKEN", "test-token", "DISCORD_GUILD_ID", GUILD,
+                "BOT_STATE_DIRECTORY", directory.toString()), null);
+        assertEquals(directory, config.stateDirectory());
     }
 }

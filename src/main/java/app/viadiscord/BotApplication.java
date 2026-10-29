@@ -60,11 +60,13 @@ public final class BotApplication {
                 return;
             }
             GvdListener commands = new GvdListener(new ChannelControls(config.guildId(), settings));
+            var responseSettings = new ResponseSettings(config.stateDirectory().resolve("response-" + config.guildId() + ".properties"));
             CompletableFuture<JDA> ready = new CompletableFuture<>();
             jda = JDABuilder.createLight(config.token(), EnumSet.of(GatewayIntent.GUILD_MESSAGES))
                     .setStatus(OnlineStatus.ONLINE)
                     .setAutoReconnect(true)
                     .setEnableShutdownHook(true)
+                    .addEventListeners(new ModeCommandListener(config.guildId(), responseSettings))
                     .addEventListeners(commands, new ListenerAdapter() {
                         @Override
                         public void onReady(ReadyEvent event) {
