@@ -71,6 +71,25 @@ class CommandRegistrationTest(unittest.TestCase):
         actual[2]['options'][0]['name_localizations'] = None
         self.assertTrue(module.matches_definition(actual, module.command_definition()['options']))
 
+    def test_omitted_optional_required_flags_are_valid_defaults(self):
+        actual = module.command_definition()['options']
+        for subcommand in actual:
+            for option in subcommand.get('options', []):
+                if option.get('required') is False:
+                    del option['required']
+        self.assertTrue(module.matches_definition(actual, module.command_definition()['options']))
+
+    def test_required_options_cannot_be_missing_or_changed_to_optional(self):
+        actual = module.command_definition()['options']
+        del actual[0]['options'][0]['required']
+        self.assertEqual('options[0].options[0].required', module.mismatch_path(actual, module.command_definition()['options']))
+        actual[0]['options'][0]['required'] = False
+        self.assertFalse(module.matches_definition(actual, module.command_definition()['options']))
+
+    def test_missing_auth_command_is_still_a_validation_failure(self):
+        actual = [item for item in module.command_definition()['options'] if item['name'] != 'auth']
+        self.assertFalse(module.matches_definition(actual, module.command_definition()['options']))
+
     def test_missing_limit_is_not_reported_as_success(self):
         def opener(request, timeout):
             if request.get_method() == 'GET':

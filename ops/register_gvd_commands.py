@@ -56,15 +56,39 @@ def command_definition():
     }
 
 
-def matches_definition(actual, expected):
-    """Discord may return extra metadata; all requested fields must still match."""
+class SchemaMismatch(ValueError):
+    def __init__(self, path):
+        self.path = path
+        super().__init__('Discord command schema did not match at ' + path)
+
+
+def mismatch_path(actual, expected, path='options'):
+    """Compare requested fields, honoring Discord's omitted required=false default."""
     if isinstance(expected, dict):
-        return isinstance(actual, dict) and all(
-            key in actual and matches_definition(actual[key], value) for key, value in expected.items())
+        if not isinstance(actual, dict):
+            return path
+        for key, value in expected.items():
+            if key not in actual:
+                if key == 'required' and value is False:
+                    continue
+                return path + '.' + key
+            mismatch = mismatch_path(actual[key], value, path + '.' + key)
+            if mismatch is not None:
+                return mismatch
+        return None
     if isinstance(expected, list):
-        return (isinstance(actual, list) and len(actual) == len(expected)
-                and all(matches_definition(a, e) for a, e in zip(actual, expected)))
-    return actual == expected
+        if not isinstance(actual, list) or len(actual) != len(expected):
+            return path + '.length'
+        for index, (value, wanted) in enumerate(zip(actual, expected)):
+            mismatch = mismatch_path(value, wanted, path + '[' + str(index) + ']')
+            if mismatch is not None:
+                return mismatch
+        return None
+    return None if actual == expected else path
+
+
+def matches_definition(actual, expected):
+    return mismatch_path(actual, expected) is None
 
 
 def register(token, opener=urlopen):
@@ -81,9 +105,11 @@ def register(token, opener=urlopen):
                       headers={**headers, 'Content-Type': 'application/json'}, method='POST')
     with opener(request, timeout=20) as response:
         command = json.load(response)
-    if (command.get('name') != 'gvd' or command.get('guild_id') is not None
-            or not matches_definition(command.get('options'), command_definition()['options'])):
-        raise ValueError('Discord did not confirm the expected global command definition.')
+    if command.get('name') != 'gvd' or command.get('guild_id') is not None:
+        raise ValueError('Discord did not confirm a global gvd command.')
+    mismatch = mismatch_path(command.get('options'), command_definition()['options'])
+    if mismatch is not None:
+        raise SchemaMismatch(mismatch)
     return command['id']
 
 
@@ -92,6 +118,8 @@ def main():
         command_id = register(os.environ.get('DISCORD_BOT_TOKEN', '').strip())
         print('GLOBAL_COMMAND_REGISTERED name=gvd id=' + command_id + ' subcommands=skipch,readch,mode,accept,reject,auth,model,limit')
         return 0
+    except SchemaMismatch as error:
+        print('Command registration failed: schema mismatch at ' + error.path + '.', file=sys.stderr)
     except HTTPError as error:
         print('Command registration failed: Discord HTTP status ' + str(error.code) + '.', file=sys.stderr)
     except (URLError, OSError):
