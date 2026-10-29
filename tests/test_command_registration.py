@@ -31,7 +31,7 @@ class CommandRegistrationTest(unittest.TestCase):
         payload = json.loads(requests[1].data)
         self.assertEqual([0], payload['contexts'])
         self.assertEqual([0], payload['integration_types'])
-        self.assertEqual(['skipch', 'readch', 'mode'], [item['name'] for item in payload['options']])
+        self.assertEqual(['skipch', 'readch', 'mode', 'accept', 'reject', 'auth', 'model'], [item['name'] for item in payload['options']])
         for subcommand in payload['options'][:2]:
             self.assertEqual(1, subcommand['type'])
             self.assertEqual('ch', subcommand['options'][0]['name'])
@@ -42,6 +42,15 @@ class CommandRegistrationTest(unittest.TestCase):
         self.assertEqual(3, mode['type'])
         self.assertTrue(mode['required'])
         self.assertEqual([{'name': name, 'value': name} for name in ['thread', 'qa']], mode['choices'])
+
+    def test_accept_is_optional_and_reject_requires_a_role(self):
+        by_name = {item['name']: item for item in module.command_definition()['options']}
+        self.assertEqual(8, by_name['accept']['options'][0]['type'])
+        self.assertFalse(by_name['accept']['options'][0]['required'])
+        self.assertEqual(8, by_name['reject']['options'][0]['type'])
+        self.assertTrue(by_name['reject']['options'][0]['required'])
+        self.assertEqual(['login', 'status', 'use', 'logout'],
+                         [choice['value'] for choice in by_name['auth']['options'][0]['choices']])
 
     def test_incomplete_registration_is_not_reported_as_success(self):
         def opener(request, timeout):

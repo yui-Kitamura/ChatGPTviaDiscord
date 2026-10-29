@@ -14,9 +14,15 @@ import net.dv8tion.jda.api.requests.restaction.MessageCreateAction;
 
 final class GvdListener extends ListenerAdapter {
     private final ChannelControls controls;
+    private final java.util.function.Consumer<MessageReceivedEvent> conversation;
 
     GvdListener(ChannelControls controls) {
+        this(controls, null);
+    }
+
+    GvdListener(ChannelControls controls, java.util.function.Consumer<MessageReceivedEvent> conversation) {
         this.controls = controls;
+        this.conversation = conversation;
     }
 
     @Override
@@ -29,6 +35,7 @@ final class GvdListener extends ListenerAdapter {
                 ? event.getChannel().asThreadChannel().getParentChannel().getId() : null;
         if (!controls.shouldRespond(event.getGuild().getId(), event.getChannel().getId(), parent,
                 event.getAuthor().isBot(), message.isWebhookMessage(), message.getType())) return;
+        if (conversation != null) { conversation.accept(event); return; }
         try {
             message.addReaction(Emoji.fromUnicode("👀")).queue(ignored -> {}, failure -> logFailure("REACTION", failure));
         } catch (RuntimeException failure) {

@@ -16,7 +16,7 @@ mvn --batch-mode --no-transfer-progress verify
 
 `target/` に、依存ライブラリを含む `java -jar` で起動可能な JAR を 1 件生成する。sources、javadoc、tests、`original-*` の JAR は対象外。成果物は `chatgptviadiscord.jar` に統一する。
 
-現在のアプリケーションは Discord Gateway に接続し、指定サーバーへの参加を確認してオンラインを維持する最小構成。通常投稿への 👀 と通知を抑えた定型返信、チャンネル単位の応答停止・再開と `/gvd mode` の応答設定保存に対応する。ChatGPT 応答と履歴保存はまだ実装していない。
+現在のアプリケーションは Discord Gateway に接続し、指定サーバーへの参加を確認してオンラインを維持する最小構成。通常投稿への 👀 と通知を抑えた定型返信、チャンネル単位の応答停止・再開と `/gvd mode` の応答設定保存に対応する。`CHATGPT_ENABLED=true` で、Bot共通のChatGPT接続と直近会話の保存を有効にできる。設定・認証の手順は [ChatGPT接続](docs/02_ChatGPT接続.md) を参照。
 
 ## CI と VPS デプロイ
 
@@ -68,14 +68,22 @@ RAM 2GB・ストレージ 100GB の VPS を初期想定とする。ビルドは 
 
 ## Bot の設定と起動
 
-Discord Developer Portal で作成した Bot を、対象サーバーへ招待する。対象チャンネルで「チャンネルを見る」「メッセージ履歴を読む」「リアクションの追加」「メッセージを送信」「スレッドでメッセージを送信」を許可する。管理者権限は不要。現段階は本文を参照せず投稿イベントに応答するため、Message Content Intent は不要。
+Discord Developer Portal で作成した Bot を、対象サーバーへ招待する。対象チャンネルで「チャンネルを見る」「メッセージ履歴を読む」「リアクションの追加」「メッセージを送信」「スレッドでメッセージを送信」を許可する。管理者権限は不要。既定の定型返信では本文を参照せず、privileged intent は不要。ChatGPT接続を有効にする場合は、Developer PortalのBot設定で **Message Content Intent** と **Server Members Intent** をONにする。ファイル添付権限も必要。
 
 | 環境変数 | properties のキー | 内容 |
 | --- | --- | --- |
 | DISCORD_BOT_TOKEN | discord.bot.token | 必須。Bot の生トークン。Bot という接頭辞は付けない。 |
 | DISCORD_GUILD_ID | discord.guild.id | 必須。参加先サーバーの ID。 |
+| CHATGPT_ENABLED | chatgpt.enabled | 既定false。trueで認証とAI返信を有効にする。 |
+| CHATGPT_CALLBACK_PORT | chatgpt.callback.port | 127.0.0.1上の認証待受。既定1455。 |
+| CHATGPT_REQUEST_TIMEOUT_SECONDS | chatgpt.request.timeout.seconds | 応答期限。既定180秒、10〜300秒。 |
+| DISCORD_AI_ROLE_ID | discord.ai.role.id | 任意の初期許可ロール。通常は /gvd accept で設定する。 |
 | BOT_STATE_DIRECTORY | bot.state.directory | 設定保存ディレクトリ。既定は作業ディレクトリ配下の state。 |
 | BOT_STARTUP_TIMEOUT_SECONDS | bot.startup.timeout.seconds | READY を待つ秒数。既定 60、指定範囲 5〜300。 |
+| CHATGPT_ENABLED | chatgpt.enabled | 既定false。trueで認証とAI返信を有効にする。 |
+| CHATGPT_CALLBACK_PORT | chatgpt.callback.port | 127.0.0.1上の認証待受。既定1455。 |
+| CHATGPT_REQUEST_TIMEOUT_SECONDS | chatgpt.request.timeout.seconds | 応答期限。既定180秒、10〜300秒。 |
+| DISCORD_AI_ROLE_ID | discord.ai.role.id | 任意の初期許可ロール。通常は /gvd accept で設定する。 |
 | BOT_STATE_DIRECTORY | bot.state.directory | モード・動的キャラの保存先。既定 state（作業ディレクトリ相対）。release の外に置く。 |
 
 環境変数を優先する。ローカルでファイルを使う場合は、config/application.properties.example を config/application.properties にコピーして、本人だけが読める設定にする。このファイルは Git 対象外。実際のトークンはチャット・コマンド引数・シェル履歴へ貼らず、エディタで入力する。
@@ -102,19 +110,23 @@ GitHub Secrets は保存後の値を読み出せない。オンライン確認�
 
 手動実行で register_commands_only を true にすると、指定 ref の /gvd 定義だけを登録する。通常の main 限定デプロイとは別の経路であり、current の切替・unit の更新・Bot の再起動は行わない。既に準備済みの VPS と Python 3 が必要。
 
-登録内容は次の 3 つ。グローバル登録し、使用コンテキストはギルドに限定する。
+登録内容は次の 7 つ。グローバル登録し、使用コンテキストはギルドに限定する。
 
 - /gvd skipch ch:チャンネル
 - /gvd readch ch:チャンネル
 - /gvd mode mode:thread または qa
+- /gvd accept role:@ロール（省略時は今使える人を一覧）
+- /gvd reject role:@ロール
+- /gvd auth action:login/status/use/logout account:保存名（省略時login/default）
+- /gvd model name:モデルslug（省略時一覧）
 
 VPS の既存 EnvironmentFile から Bot トークンを読み、Discord REST API のグローバルコマンド作成・更新エンドポイントに gvd だけを upsert する。他のコマンドをまとめて上書きしない。トークンは GitHub runner や成果物へ取り出さない。
 
-コマンド定義の登録とハンドラーのデプロイは別操作。定義だけを登録しても、実行にはハンドラーを含む JAR が必要。通常起動ではコマンドを再登録しない。/gvd auth は別の作業として扱う。
+コマンド定義の登録とハンドラーのデプロイは別操作。定義だけを登録しても、実行にはハンドラーを含む JAR が必要。通常起動ではコマンドを再登録しない。認証・許可ロール・モデルの操作は [日本語セットアップ手順](docs/02_ChatGPT接続.md) を参照。
 
 ## 投稿への応答とチャンネル設定
 
-指定サーバーの通常のユーザー投稿（返信を含む）に 👀 を付け、元投稿へのリプライで `botが読みました` と返す。返信先のユーザーをメンションせず、通知抑制フラグを設定する。Discord の未読表示までは抑制しない。Bot（自身を含む）・Webhook・システム投稿・DM・対象外サーバーには応答しない。本文の取得・保存や AI 呼び出しは行わない。
+`CHATGPT_ENABLED=false` では、指定サーバーの通常のユーザー投稿（返信を含む）に 👀 を付け、元投稿へのリプライで `botが読みました` と返す。返信先のユーザーをメンションせず、通知抑制フラグを設定する。Discord の未読表示までは抑制しない。Bot（自身を含む）・Webhook・システム投稿・DM・対象外サーバーには応答しない。この定型返信モードでは本文の取得・保存や AI 呼び出しは行わない。`CHATGPT_ENABLED=true` では、許可ロールの投稿に共通のChatGPT接続で応答する。初回の認証・モデル選択後に利用でき、定型返信をAI回答に置き換える。
 
 - `/gvd skipch ch:チャンネル`：👀 と返信を両方停止する。
 - `/gvd readch ch:チャンネル`：そのチャンネルの停止設定を解除する。
@@ -134,7 +146,7 @@ VPS の既存 EnvironmentFile から Bot トークンを読み、Discord REST AP
 
 ロール名は `GvD: <キャラ名>`。権限なし・メンション可能・メンバーへの自動付与なしで、Bot に「ロールの管理」権限と適切なロール階層が必要。ロールをメンションするのは利用者で、AI 出力では通知を発生させない。これらは AI が演じるキャラの文脈ラベルであり、Discord ユーザーや別 Bot を作成する機能ではない。
 
-**今回の接続範囲:** mode の設定保存は Gateway の実行ハンドラーにつないでいる。動的キャラの作成・保存・ロールIDからのメンション解釈・モード別の応答指示生成は、後続の AI 接続で呼ぶ部品として実装した。thread に切り替えただけではキャラやロールはまだ生成されず、通常投稿への AI 返信も始まらない。コマンドの返信にもこの状態を表示する。
+**今回の接続範囲:** mode の設定保存は Gateway の実行ハンドラーにつないでいる。動的キャラの作成・保存・ロールIDからのメンション解釈・モード別の応答指示生成は、後続の AI 接続で呼ぶ部品として実装した。thread に切り替えただけではキャラやロールはまだ生成されず、通常投稿への AI 返信には別途 ChatGPT 接続とモデル選択が必要。コマンドの返信にもこの状態を表示する。
 
 後続の応答処理では、許可サーバー・利用者・場所の検証後、投稿のロールメンションIDを `ResponseContext.prepare` に渡す。返されたモード別指示とキャラ定義、関連履歴・次のレス番号を生成側へ渡し、生成結果のキャラ定義を `CharacterRoles` に渡す。生成結果の構文解析、レス番号の継続保存、Discord の長文分割・通知抑制付き送信は AI 応答実装時に接続する。複数応答からのロール作成はギルドごとに1つの `CharacterRoles` インスタンスで直列化する。ロール作成・保存に失敗した応答を成功扱いしない。
 
