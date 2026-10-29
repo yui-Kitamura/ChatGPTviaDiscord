@@ -13,7 +13,7 @@ import net.dv8tion.jda.api.events.session.ShutdownEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import net.dv8tion.jda.api.requests.GatewayIntent;
 
-/** Gateway connection only: no message listeners, commands, or AI calls yet. */
+/** Discord Gateway connection and limit command. AI calls are not connected yet. */
 public final class BotApplication {
     private BotApplication() {}
 
@@ -55,6 +55,7 @@ public final class BotApplication {
                     .setStatus(OnlineStatus.ONLINE)
                     .setAutoReconnect(true)
                     .setEnableShutdownHook(true)
+                    .addEventListeners(new LimitCommandListener(config.guildId()))
                     .addEventListeners(new ListenerAdapter() {
                         @Override
                         public void onReady(ReadyEvent event) {

@@ -11,7 +11,7 @@ API = 'https://discord.com/api/v10'
 def command_definition():
     return {
         'name': 'gvd',
-        'description': 'GvDのチャンネル応答設定',
+        'description': 'GvDの設定・AI利用枠の確認',
         'type': 1,
         'contexts': [0],
         'integration_types': [0],
@@ -26,7 +26,11 @@ def command_definition():
                 ('skipch', 'このチャンネルではリアクションと返信を停止する'),
                 ('readch', 'このチャンネルでリアクションと返信を再開する'),
             ]
-        ],
+        ] + [{
+            'type': 1,
+            'name': 'limit',
+            'description': 'AIの利用枠・残量と確認先を表示する',
+        }],
     }
 
 
@@ -45,7 +49,7 @@ def register(token, opener=urlopen):
     with opener(request, timeout=20) as response:
         command = json.load(response)
     if (command.get('name') != 'gvd' or command.get('guild_id') is not None
-            or [option['name'] for option in command.get('options', [])] != ['skipch', 'readch']):
+            or [option['name'] for option in command.get('options', [])] != ['skipch', 'readch', 'limit']):
         raise ValueError('Discord did not confirm the expected global command definition.')
     return command['id']
 
@@ -53,7 +57,7 @@ def register(token, opener=urlopen):
 def main():
     try:
         command_id = register(os.environ.get('DISCORD_BOT_TOKEN', '').strip())
-        print('GLOBAL_COMMAND_REGISTERED name=gvd id=' + command_id + ' subcommands=skipch,readch')
+        print('GLOBAL_COMMAND_REGISTERED name=gvd id=' + command_id + ' subcommands=skipch,readch,limit')
         return 0
     except HTTPError as error:
         print('Command registration failed: Discord HTTP status ' + str(error.code) + '.', file=sys.stderr)

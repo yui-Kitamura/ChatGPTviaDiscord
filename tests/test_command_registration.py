@@ -31,7 +31,10 @@ class CommandRegistrationTest(unittest.TestCase):
         payload = json.loads(requests[1].data)
         self.assertEqual([0], payload['contexts'])
         self.assertEqual([0], payload['integration_types'])
-        for subcommand in payload['options']:
+        self.assertEqual(['skipch', 'readch', 'limit'], [option['name'] for option in payload['options']])
+        self.assertEqual(1, payload['options'][2]['type'])
+        self.assertFalse(payload['options'][2].get('options'))
+        for subcommand in payload['options'][:2]:
             self.assertEqual(1, subcommand['type'])
             self.assertEqual('ch', subcommand['options'][0]['name'])
             self.assertEqual(7, subcommand['options'][0]['type'])
