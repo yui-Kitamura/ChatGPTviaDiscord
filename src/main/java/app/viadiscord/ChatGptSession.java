@@ -58,45 +58,66 @@ final class ChatGptSession implements AutoCloseable {
         return OpenAiTransport.AUTHORIZE+"?"+OpenAiTransport.form(values);
     }
     private void start(HttpExchange exchange) throws IOException {
+        var stage=AuthDiagnostics.Stage.START_REQUEST;
         try {
-            if(!validRequest(exchange,"/auth/start")){reply(exchange,400,"Invalid request.");return;}
+            if(!validRequest(exchange,"/auth/start")){AuthDiagnostics.failure(stage,new IOException(),"");reply(exchange,400,"Invalid request.");return;}
             String ticket=query(exchange).get("ticket");Attempt found;
             synchronized(this){found=attempts.values().stream().filter(a->a.ticket.equals(ticket)&&a.expires.isAfter(Instant.now())).findFirst().orElse(null);}
-            if(found==null||!found.permitted.getAsBoolean()){reply(exchange,400,"Sign-in link expired. Run /gvd auth again.");return;}
+            if(found==null||!found.permitted.getAsBoolean()){AuthDiagnostics.failure(stage,new IOException(),"");reply(exchange,400,"Sign-in link expired. Run /gvd auth again.");return;}
+            stage=AuthDiagnostics.Stage.START_REDIRECT;
             headers(exchange);exchange.getResponseHeaders().set("Location",authorization(found));exchange.sendResponseHeaders(302,-1);exchange.close();
-        }catch(Exception error){reply(exchange,400,"Sign-in could not be started. Run /gvd auth again.");}
+        }catch(Exception error){AuthDiagnostics.failure(stage,error,"");reply(exchange,400,"Sign-in could not be started. Run /gvd auth again.");}
     }
     private void complete(HttpExchange exchange) throws IOException {
         Attempt attempt=null;
+        var stage=AuthDiagnostics.Stage.CALLBACK_REQUEST;
+        String callbackError="";
         try {
-            if(!validRequest(exchange,"/auth/callback")){reply(exchange,400,"Invalid request.");return;}
+            if(!validRequest(exchange,"/auth/callback")){AuthDiagnostics.failure(stage,new IOException(),"");reply(exchange,400,"Invalid request.");return;}
+            stage=AuthDiagnostics.Stage.CALLBACK_QUERY;
             var query=query(exchange);String state=query.get("state");
+            stage=AuthDiagnostics.Stage.CALLBACK_STATE;
             synchronized(this){if(state!=null)attempt=attempts.remove(state);}
             if(attempt==null||attempt.expires.isBefore(Instant.now())||!attempt.permitted.getAsBoolean()){
+                AuthDiagnostics.failure(stage,new IOException(),"");
                 reply(exchange,400,"Sign-in expired or invalid. Run /gvd auth again.");return;
             }
-            if(query.containsKey("error"))throw new IOException("Authorization declined.");
+            stage=AuthDiagnostics.Stage.CALLBACK_CONSENT;
+            if(query.containsKey("error")){callbackError=query.get("error");throw new IOException("Authorization declined.");}
+            stage=AuthDiagnostics.Stage.CALLBACK_CLIENT;
             String client=query.getOrDefault("client_id",attempt.client);
             if(client.isBlank()||"dynamic_agent_client".equals(client)||(!attempt.client.isEmpty()&&!attempt.client.equals(client)))
                 throw new IOException("Invalid issued OAuth client.");
+            stage=AuthDiagnostics.Stage.CALLBACK_CODE;
             String code=query.get("code");if(code==null||code.isBlank())throw new IOException("Missing authorization code.");
+            stage=AuthDiagnostics.Stage.TOKEN_EXCHANGE;
             var response=transport.tokens(Map.of("grant_type","authorization_code","client_id",client,"code",code,
                     "code_verifier",attempt.verifier,"redirect_uri",callback,"resource",OpenAiTransport.RESOURCE));
+            stage=AuthDiagnostics.Stage.ID_TOKEN_PARSE;
             var token=SignedJWT.parse(response.path("id_token").asText());
+            stage=AuthDiagnostics.Stage.SIGNING_KEYS;
+            var signingKeys=transport.keys(token.getHeader().getKeyID());
+            stage=AuthDiagnostics.Stage.ID_TOKEN_VERIFY;
             var identity=OpenAiIdentity.verify(token.serialize(),client,attempt.nonce,attempt.subject.isEmpty()?null:attempt.subject,
-                    transport.keys(token.getHeader().getKeyID()),Instant.now());
+                    signingKeys,Instant.now());
+            stage=AuthDiagnostics.Stage.TOKEN_RESPONSE;
             var account=fromTokens(response,null);
             account.clientId=client;account.subject=identity.subject();account.email=Objects.toString(identity.email(),"");
             var previous=accounts.get(attempt.key);if(previous!=null)account.model=previous.model;
+            stage=AuthDiagnostics.Stage.PERMISSION_RECHECK;
             if(!attempt.permitted.getAsBoolean())throw new IOException("AI role no longer available.");
+            stage=AuthDiagnostics.Stage.CREDENTIAL_SAVE;
             synchronized(this) {
                 if(!Objects.equals(generations.get(attempt.key),attempt.generation))throw new IOException("Sign-in cancelled.");
                 accounts.put(attempt.key,account,true);unsafeRefresh.remove(attempt.key);
             }
             String status=account.canInvoke()?"ChatGPTへの接続が完了しました。このアプリのAI応答はChatGPTプランの枠を使用します。\n/gvd model でモデルを選んでください。\n利用枠: https://chatgpt.com/settings/usage"
                     :"ログインしましたが、ChatGPTプラン利用への同意がありません。AI応答は停止しています。";
+            stage=AuthDiagnostics.Stage.CALLBACK_RESPONSE;
+            System.err.printf("GVD_AUTH_CONNECTED plan_usage=%s%n",account.canInvoke());
             reply(exchange,200,"ChatGPT sign-in complete. Return to Discord.");safeResult(attempt,status);
         } catch(Exception failure) {
+            AuthDiagnostics.failure(stage,failure,callbackError);
             reply(exchange,400,"ChatGPT sign-in failed. Return to Discord and run /gvd auth again.");
             if(attempt!=null)safeResult(attempt,"ChatGPTへの接続が完了しませんでした。同意・アカウント・Workspaceを確認し、/gvd auth を再実行してください。");
         }

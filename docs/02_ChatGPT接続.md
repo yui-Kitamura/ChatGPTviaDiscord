@@ -2,7 +2,7 @@
 
 Bot共通のChatGPTアカウントを接続する。許可ロールを持つ人の発言に、そのアカウントのChatGPTプランを使って応答する。利用者ごとのChatGPTログインは不要。
 
-OpenAIが公開するOSS向け Sign in with ChatGPT と Responses API を使う。Codex CLI・Codexの認証ファイル・ChatGPTの内部APIは使わない。別途課金されるAPIキーへの自動切替もしない。利用可否は、実際にログインしたアカウント・Workspace・OpenAI側のポリシーによる。
+OpenAIが公開するOSS向け Sign in with ChatGPT と Responses API を使う。Codex CLI・Codexの認証ファイル・ChatGPTの内部APIは使わない。別途課金されるAPIキーへの自動切替もしない。公開案内のプラン利用対象は適格なPlus/Pro。Business Standardの利用枠へ同じ方式で接続できることは未確認。利用可否は、実際にログインしたアカウント・Workspace・OpenAI側のポリシーによる。
 
 ## 先に行うこと
 
@@ -76,6 +76,23 @@ PC側で1455番を別のアプリが使用している場合は、VPSの `CHATGP
 ## 動作確認
 
 許可メンバーの投稿、無許可メンバーの投稿、Bot・Webhook、skip/read、Bot再起動後の会話継続、長文添付、ログアウト後の投稿をそれぞれ確認する。CIの偽サーバーによる検証と、実アカウントでの同意・モデル取得・Discord返信は別の確認。
+
+## 認証失敗のログ
+
+VPSで次を実行して待ち受け、Discordで新しく `/gvd auth` を実行して再現する。
+
+```sh
+sudo journalctl -u chatgptviadiscord.service -f -o cat
+```
+
+認証失敗は `GVD_AUTH_FAILED`、接続完了は `GVD_AUTH_CONNECTED` を探す。失敗行には `stage`（処理段階）、`reason`（IDトークン検証理由）、`http_status`、既知の `oauth_code`、OpenAIの `request_id` を出す。callback URL・コード・トークン・state・nonce・メール・例外本文は記録しない。
+
+- `TOKEN_EXCHANGE`：OpenAIへの認証コード交換で失敗。
+- `SIGNING_KEYS`：公開署名鍵の取得で失敗。
+- `ID_TOKEN_VERIFY`：IDトークンの検証で失敗。`NONCE`・`SIGNATURE`・`ISSUER`・`AUDIENCE` などで理由を示す。
+- `CREDENTIAL_SAVE`：検証後の認証情報保存で失敗。
+
+OpenAIのログイン画面内で止まりcallbackへ戻っていない場合は、Bot側にcallback失敗ログは出ない。OpenAI画面の診断情報と区別する。
 
 ## 参照した公開仕様
 
