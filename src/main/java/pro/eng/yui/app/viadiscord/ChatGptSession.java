@@ -189,6 +189,13 @@ final class ChatGptSession implements AutoCloseable {
         if(!account.canInvoke())throw new ChatGptException("permission_missing",0);
         return account;
     }
+    synchronized String connectionStatus(String owner) throws IOException {
+        String key=accounts.activeKey(owner);var account=key==null?null:accounts.get(key);
+        if(account==null||account.accessToken.isEmpty()||unsafeRefresh.contains(key))return "ChatGPT へのログインが必要です。管理者が /gvd auth を実行してください。";
+        if(!account.canInvoke())return "ChatGPT プラン利用への同意が必要です。管理者が /gvd auth で確認してください。";
+        if(account.model.isEmpty())return "ChatGPT のモデルが未選択です。管理者が /gvd model で選択してください。";
+        return "ChatGPT 接続を設定済みです。許可ロールの投稿に、この場所のモードを使って応答します。";
+    }
     synchronized boolean isCurrent(String owner,ChatGptAccounts.Account expected) throws IOException {
         String key=accounts.activeKey(owner);var current=key==null?null:accounts.get(key);
         return current!=null&&!current.accessToken.isEmpty()&&current.clientId.equals(expected.clientId)&&current.subject.equals(expected.subject);

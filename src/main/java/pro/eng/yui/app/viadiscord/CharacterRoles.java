@@ -5,7 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import net.dv8tion.jda.api.entities.Guild;
 
-/** Called with validated structured character proposals from a future AI response provider. */
+/** Creates or reuses role labels after the response's character proposals have been validated. */
 final class CharacterRoles {
     interface RoleGateway {
         boolean exists(String roleId);
@@ -32,6 +32,10 @@ final class CharacterRoles {
     }
 
     synchronized List<ResponseSettings.CharacterRole> ensureCharacters(List<CharacterSpec> proposals) throws IOException {
+        return ensureCharacters(proposals,()->true);
+    }
+
+    synchronized List<ResponseSettings.CharacterRole> ensureCharacters(List<CharacterSpec> proposals, java.util.function.BooleanSupplier permitted) throws IOException {
         var unique = new LinkedHashMap<String, CharacterSpec>();
         for (var character : proposals) {
             var previous = unique.putIfAbsent(character.name(), character);
@@ -46,6 +50,7 @@ final class CharacterRoles {
         if (known.size() + additions > 64) throw new IllegalArgumentException("Character limit reached (64).");
         var result = new java.util.ArrayList<ResponseSettings.CharacterRole>();
         for (var proposal : unique.values()) {
+            if(!permitted.getAsBoolean())throw new IOException("Character operation is no longer permitted.");
             var existing = known.get(proposal.name());
             // Preserve established characterization when a name reappears.
             var character = existing == null ? proposal : existing.character();

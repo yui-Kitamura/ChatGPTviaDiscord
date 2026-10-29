@@ -11,11 +11,13 @@ import net.dv8tion.jda.api.hooks.ListenerAdapter;
 final class ModeCommandListener extends ListenerAdapter {
     private final String guildId;
     private final ResponseSettings settings;
+    private final ChatGptSession session;
     private final ExecutorService worker = Executors.newVirtualThreadPerTaskExecutor();
 
-    ModeCommandListener(String guildId, ResponseSettings settings) {
+    ModeCommandListener(String guildId, ResponseSettings settings, ChatGptSession session) {
         this.guildId = guildId;
         this.settings = settings;
+        this.session = session;
     }
 
     @Override public void onSlashCommandInteraction(SlashCommandInteractionEvent event) {
@@ -39,13 +41,20 @@ final class ModeCommandListener extends ListenerAdapter {
             try {
                 settings.setMode(event.getChannel().getId(), mode);
                 hook.editOriginal("この場所の応答モードを " + mode.value() + " に保存しました。"
-                        + "\nAI応答は未接続です。キャラとロールは応答生成の接続後、会話に応じて作成します。")
+                        + "\n" + status()
+                        + "\nthread では会話に応じたキャラと Discord ロールを作成・再利用し、レス番号を続けます。Bot にロールの管理権限が必要です。")
                         .setAllowedMentions(java.util.List.of()).queue();
             } catch (IOException e) {
                 hook.editOriginal("設定を保存できませんでした。保存先の権限・空き容量を確認して再実行してください。")
                         .queue();
             }
         }));
+    }
+
+    String status() {
+        if (session == null) return "ChatGPT 接続は無効です。管理者が CHATGPT_ENABLED を確認してください。";
+        try { return session.connectionStatus(guildId); }
+        catch (IOException e) { return "接続設定の状態を読み取れませんでした。管理者が /gvd auth action:status で確認してください。"; }
     }
 
     @Override public void onShutdown(ShutdownEvent event) { worker.shutdown(); }

@@ -20,6 +20,21 @@ class OpenAiTransport {
     private final Duration timeout;
     private JWKSet keys;
     private Instant keysAt=Instant.EPOCH;
+    private final Map<String,ApiLimits> limits=new LinkedHashMap<>();
+    private static String limitKey(String token,String model) {
+        try {return HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(token.getBytes(StandardCharsets.UTF_8)))+":"+model;}
+        catch(java.security.NoSuchAlgorithmException e){throw new IllegalStateException(e);}
+    }
+    synchronized ApiLimits limits(String token,String model) {return limits.get(limitKey(token,model));}
+    private synchronized void observe(String token,String model,HttpResponse<?> response) {
+        String key=limitKey(token,model);
+        limits.remove(key);limits.put(key,ApiLimits.from(response.headers()));
+        while(limits.size()>64)limits.remove(limits.keySet().iterator().next());
+    }
+    private synchronized void outcome(String token,String model,String result) {
+        String key=limitKey(token,model);var observed=limits.get(key);
+        if(observed!=null)limits.put(key,observed.withOutcome(result));
+    }
     OpenAiTransport(Duration timeout) {
         this(timeout,URI.create("https://auth.openai.com/api/accounts/oauth/token"),URI.create("https://auth.openai.com/.well-known/jwks.json"),URI.create(RESOURCE+"/"),URI.create("https://auth.openai.com/api/accounts/oauth/revoke"));
     }
@@ -59,7 +74,9 @@ class OpenAiTransport {
         String payload=ChatGptAccounts.JSON.writeValueAsString(Map.of("model",model,"instructions",instructions,"input",history,"store",false,"stream",true));
         var request=authorized(api.resolve("responses"),token).timeout(timeout).header("Content-Type","application/json").header("Accept","text/event-stream")
                 .POST(HttpRequest.BodyPublishers.ofString(payload)).build();
-        var response=send(request);
+        HttpResponse<InputStream> response;
+        try {response=send(request,r->observe(token,model,r));}
+        catch(ChatGptException failure){outcome(token,model,failure.code);throw failure;}
         try(var input=response.body();var timer=Executors.newSingleThreadScheduledExecutor(Thread.ofVirtual().factory())) {
             var stop=timer.schedule(()->{try{input.close();}catch(IOException ignored){}},timeout.toMillis(),TimeUnit.MILLISECONDS);
             try {
@@ -79,15 +96,20 @@ class OpenAiTransport {
                     if("response.completed".equals(type)){completed=true;break;}
                 }
                 if(!completed||text.isEmpty())throw new ChatGptException("interrupted_stream",200);
-                return text.toString();
-            } catch(ChatGptException failure) {failure.requestId=requestId(response);throw failure;}
+                outcome(token,model,"success");return text.toString();
+            } catch(ChatGptException failure) {outcome(token,model,failure.code);failure.requestId=requestId(response);throw failure;}
+            catch(IOException failure) {outcome(token,model,"failed");throw failure;}
             finally {stop.cancel(false);}
         }
     }
     private HttpRequest.Builder authorized(URI uri,String token){return HttpRequest.newBuilder(uri).timeout(timeout).header("Authorization","Bearer "+token);}
     private HttpResponse<InputStream> send(HttpRequest request) throws IOException {
+        return send(request,response->{});
+    }
+    private HttpResponse<InputStream> send(HttpRequest request,java.util.function.Consumer<HttpResponse<InputStream>> observer) throws IOException {
         try {
             var response=http.send(request,HttpResponse.BodyHandlers.ofInputStream());
+            observer.accept(response);
             if(response.statusCode()/100!=2)try(var stream=response.body()){
                 JsonNode error;
                 try{error=ChatGptAccounts.JSON.readTree(readLimited(stream,65536));}catch(IOException e){error=ChatGptAccounts.JSON.createObjectNode();}
