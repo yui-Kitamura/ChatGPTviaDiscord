@@ -24,11 +24,12 @@ mvn --batch-mode --no-transfer-progress verify
 | --- | --- | --- |
 | main への push | 実行 | build 成功後に実行 |
 | main 宛ての pull request | 実行 | 実行しない |
-| 手動実行 | 選択した ref を build | main を選択した場合だけ実行 |
+| 手動実行（通常） | 選択した ref を build | main を選択した場合だけ実行 |
+| 手動実行（定義登録のみ） | 選択した ref を build | グローバルコマンド定義だけ登録し、Bot を再起動しない |
 
 build は利用者が登録する Secrets を参照せず、外部の Discord・OpenAI・DB への接続を前提としない。GitHub が提供するトークンの権限は `contents: read` に限定し、checkout 後の Git 認証情報を保持しない。
 
-JAR、systemd unit、コミット SHA、チェックサムを同一 run の artifact として渡す。deploy は再ビルドせず、その artifact を検証し、`appleboy/scp-action` で転送する。`appleboy/ssh-action` による反映・再起動も同じ deploy ジョブ内で行う。Actions は確認したリリースのコミット SHA に固定する。
+JAR、systemd unit、コマンド登録スクリプト、コミット SHA、チェックサムを同一 run の artifact として渡す。deploy は再ビルドせず、その artifact を検証し、`appleboy/scp-action` で転送する。`appleboy/ssh-action` による反映・再起動も同じ deploy ジョブ内で行う。Actions は確認したリリースのコミット SHA に固定する。
 
 ### デプロイ用設定
 
@@ -92,3 +93,16 @@ Bot トークンは VPS の /etc/chatgptviadiscord.env に保持し、root:root�
 ops/chatgptviadiscord.env.example と ops/chatgptviadiscord.service を配置例として用意している。CI 経由では専用ユーザーと unit の配置を deploy ジョブが行う。手動起動時もこの定義に合わせ、実設定を用意した後に起動する。
 
 GitHub Secrets は保存後の値を読み出せない。オンライン確認のためにこちらから VPS へ接続する場合は、別途利用できる SSH 接続設定が必要。アプリと設定を準備しただけでは実接続確認済みとしない。
+
+## グローバルコマンドの先行登録
+
+手動実行で register_commands_only を true にすると、指定 ref の /gvd 定義だけを登録する。通常の main 限定デプロイとは別の経路であり、current の切替・unit の更新・Bot の再起動は行わない。既に準備済みの VPS と Python 3 が必要。
+
+登録内容は次の 2 つ。グローバル登録し、使用コンテキストはギルドに限定する。
+
+- /gvd skipch ch:チャンネル
+- /gvd readch ch:チャンネル
+
+VPS の既存 EnvironmentFile から Bot トークンを読み、Discord REST API のグローバルコマンド作成・更新エンドポイントに gvd だけを upsert する。他のコマンドをまとめて上書きしない。トークンは GitHub runner や成果物へ取り出さない。
+
+この段階では定義の登録だけで、稼働中の Bot に実行ハンドラーはない。表示に浸透しても実行はまだできない。後続の実装では skipch でリアクションと返信を止め、readch で再開する。通常投稿への 👀 と通知を抑制した「botが読みました」の返信、Bot・Webhook・システム投稿の除外、VPS のファイル永続化を追加する。/gvd auth は別の作業として扱う。
