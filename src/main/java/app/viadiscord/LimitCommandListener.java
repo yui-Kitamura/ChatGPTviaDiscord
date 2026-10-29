@@ -30,7 +30,7 @@ final class LimitCommandListener extends ListenerAdapter {
         }
         return """
                 AI の利用枠・残量
-                残量: 取得できません（この Bot の AI 接続・認証はまだ未実装です）。
+                残量: 取得できません（利用枠の数値取得は未実装です）。
                 回復時刻: 不明です。
                 ChatGPT アカウントの利用状況は「設定 → Usage」で確認してください。
                 https://chatgpt.com/settings/usage

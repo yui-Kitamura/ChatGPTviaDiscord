@@ -13,6 +13,12 @@
   </properties>
   <dependencies>
     <dependency>
+      <groupId>com.nimbusds</groupId><artifactId>nimbus-jose-jwt</artifactId><version>10.10</version>
+    </dependency>
+    <dependency>
+      <groupId>com.fasterxml.jackson.core</groupId><artifactId>jackson-databind</artifactId><version>2.22.2</version>
+    </dependency>
+    <dependency>
       <groupId>net.dv8tion</groupId><artifactId>JDA</artifactId><version>6.7.0</version>
       <exclusions>
         <exclusion><groupId>club.minnced</groupId><artifactId>opus-java</artifactId></exclusion>
@@ -30,6 +36,10 @@
     </dependency>
   </dependencies>
   <build>
+    <resources>
+      <resource><directory>src/main/resources</directory></resource>
+      <resource><directory>docs/discord-ai</directory><targetPath>discord-ai</targetPath><includes><include>README.md</include><include>AGENTS.md</include></includes></resource>
+    </resources>
     <finalName>chatgptviadiscord</finalName>
     <plugins>
       <plugin>

@@ -38,8 +38,10 @@ public final class BotApplication {
                 }
             }
             BotConfig config;
+            AiConfig aiConfig;
             try {
                 config = BotConfig.load(System.getenv(), file);
+                aiConfig = AiConfig.load(System.getenv(), file);
             } catch (IllegalArgumentException e) {
                 // These messages are authored by BotConfig and never include values.
                 System.err.println("Configuration error: " + e.getMessage());
@@ -59,15 +61,32 @@ public final class BotApplication {
                 System.exit(1);
                 return;
             }
-            GvdListener commands = new GvdListener(new ChannelControls(config.guildId(), settings));
+            var controls = new ChannelControls(config.guildId(), settings);
+            var access = new AiAccess(config.stateDirectory(), aiConfig.roleId());
+            var transport = new OpenAiTransport(aiConfig.timeout());
+            var accounts = aiConfig.enabled() ? new ChatGptAccounts(config.stateDirectory().resolve("chatgpt")) : null;
+            var session = aiConfig.enabled() ? new ChatGptSession(accounts, transport, aiConfig.callbackPort()) : null;
             var responseSettings = new ResponseSettings(config.stateDirectory().resolve("response-" + config.guildId() + ".properties"));
+            var conversation = aiConfig.enabled() ? new AiConversation(access, controls, session, transport, responseSettings,
+                    new ChatHistory(config.stateDirectory().resolve("recent-chat")), conversationInstructions()) : null;
+            GvdListener commands = new GvdListener(controls, conversation);
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                if (conversation != null) conversation.close();
+                if (session != null) session.close();
+                if (accounts != null) try { accounts.close(); } catch (IOException ignored) {}
+            }, "gvd-ai-shutdown"));
+            var intents = EnumSet.of(GatewayIntent.GUILD_MESSAGES);
+            if (aiConfig.enabled()) intents.addAll(EnumSet.of(GatewayIntent.MESSAGE_CONTENT, GatewayIntent.GUILD_MEMBERS));
             CompletableFuture<JDA> ready = new CompletableFuture<>();
-            jda = JDABuilder.createLight(config.token(), EnumSet.of(GatewayIntent.GUILD_MESSAGES))
+            jda = JDABuilder.createLight(config.token(), intents)
+                    .setMemberCachePolicy(aiConfig.enabled() ? net.dv8tion.jda.api.utils.MemberCachePolicy.ALL : net.dv8tion.jda.api.utils.MemberCachePolicy.NONE)
+                    .setChunkingFilter(aiConfig.enabled() ? net.dv8tion.jda.api.utils.ChunkingFilter.ALL : net.dv8tion.jda.api.utils.ChunkingFilter.NONE)
                     .setStatus(OnlineStatus.ONLINE)
                     .setAutoReconnect(true)
                     .setEnableShutdownHook(true)
                     .addEventListeners(new LimitCommandListener(config.guildId()))
                     .addEventListeners(new ModeCommandListener(config.guildId(), responseSettings))
+                    .addEventListeners(new AiCommands(config.guildId(), aiConfig, access, accounts, session, transport))
                     .addEventListeners(commands, new ListenerAdapter() {
                         @Override
                         public void onReady(ReadyEvent event) {
@@ -106,5 +125,15 @@ public final class BotApplication {
                     + "). Check the token, configuration file, and network connection.");
             System.exit(1);
         }
+    }
+    private static String conversationInstructions() throws IOException {
+        StringBuilder text=new StringBuilder();
+        for (String file : new String[]{"README.md", "AGENTS.md"}) {
+            try (var stream=BotApplication.class.getResourceAsStream("/discord-ai/"+file)) {
+                if (stream==null) throw new IOException("Conversation instructions are missing.");
+                text.append(new String(stream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)).append("\n");
+            }
+        }
+        return text.toString();
     }
 }

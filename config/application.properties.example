@@ -4,3 +4,10 @@ discord.bot.token=
 discord.guild.id=
 bot.startup.timeout.seconds=60
 bot.state.directory=state
+
+# Enable only after enabling Message Content and Server Members intents in Discord.
+chatgpt.enabled=false
+chatgpt.callback.port=1455
+chatgpt.request.timeout.seconds=180
+# Prefer /gvd accept role:@role; this is only an optional initial value.
+discord.ai.role.id=

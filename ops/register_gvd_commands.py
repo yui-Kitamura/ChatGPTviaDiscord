@@ -35,9 +35,23 @@ def command_definition():
                 'choices': [{'name': name, 'value': name} for name in ['thread', 'qa']],
             }],
         }, {
-            'type': 1,
-            'name': 'limit',
-            'description': 'AIの利用枠・残量と確認先を表示する',
+            'type': 1, 'name': 'accept', 'description': 'AI利用を許可するロールを追加。省略時は現在使える人を表示',
+            'options': [{'type': 8, 'name': 'role', 'description': '許可するロール', 'required': False}],
+        }, {
+            'type': 1, 'name': 'reject', 'description': 'AI利用を許可するロールを削除',
+            'options': [{'type': 8, 'name': 'role', 'description': '許可から外すロール', 'required': True}],
+        }, {
+            'type': 1, 'name': 'auth', 'description': 'ChatGPTアカウントを接続・選択・ログアウトする',
+            'options': [
+                {'type': 3, 'name': 'action', 'description': '操作（省略時login）', 'required': False,
+                 'choices': [{'name': a, 'value': a} for a in ['login', 'status', 'use', 'logout']]},
+                {'type': 3, 'name': 'account', 'description': '保存名（英数字・_・-、省略時default）', 'required': False},
+            ],
+        }, {
+            'type': 1, 'name': 'model', 'description': 'ChatGPTモデルを一覧・選択する',
+            'options': [{'type': 3, 'name': 'name', 'description': 'モデルslug（省略時一覧）', 'required': False}],
+        }, {
+            'type': 1, 'name': 'limit', 'description': 'AIの利用枠・残量と確認先を表示する',
         }],
     }
 
@@ -76,7 +90,7 @@ def register(token, opener=urlopen):
 def main():
     try:
         command_id = register(os.environ.get('DISCORD_BOT_TOKEN', '').strip())
-        print('GLOBAL_COMMAND_REGISTERED name=gvd id=' + command_id + ' subcommands=skipch,readch,mode,limit')
+        print('GLOBAL_COMMAND_REGISTERED name=gvd id=' + command_id + ' subcommands=skipch,readch,mode,accept,reject,auth,model,limit')
         return 0
     except HTTPError as error:
         print('Command registration failed: Discord HTTP status ' + str(error.code) + '.', file=sys.stderr)
