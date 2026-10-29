@@ -39,9 +39,11 @@ public final class BotApplication {
             }
             BotConfig config;
             AiConfig aiConfig;
+            CodexUsageConfig usageConfig;
             try {
                 config = BotConfig.load(System.getenv(), file);
                 aiConfig = AiConfig.load(System.getenv(), file);
+                usageConfig = CodexUsageConfig.load(System.getenv(), file);
             } catch (IllegalArgumentException e) {
                 // These messages are authored by BotConfig and never include values.
                 System.err.println("Configuration error: " + e.getMessage());
@@ -84,7 +86,8 @@ public final class BotApplication {
                     .setStatus(OnlineStatus.ONLINE)
                     .setAutoReconnect(true)
                     .setEnableShutdownHook(true)
-                    .addEventListeners(new LimitCommandListener(config.guildId(), session, transport))
+                    .addEventListeners(new LimitCommandListener(config.guildId(), session, transport,
+                            usageConfig.enabled() ? new CodexUsageClient(usageConfig) : null))
                     .addEventListeners(new ModeCommandListener(config.guildId(), responseSettings, session))
                     .addEventListeners(new AiCommands(config.guildId(), aiConfig, access, accounts, session, transport))
                     .addEventListeners(commands, new ListenerAdapter() {
