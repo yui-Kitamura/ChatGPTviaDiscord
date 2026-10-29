@@ -6,6 +6,8 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 import java.nio.file.Path;
+import java.nio.file.Files;
+import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 import java.util.Collection;
 import java.util.function.Consumer;
 import net.dv8tion.jda.api.entities.Guild;
@@ -38,6 +40,10 @@ class GvdListenerTest {
     MessageCreateAction reply;
     RestAction<Void> reaction;
     Guild guild;
+    SlashCommandInteractionEvent commandEvent;
+    InteractionHook commandHook;
+    TextChannel logChannel;
+    MessageCreateAction logPost;
 
     @BeforeEach @SuppressWarnings("unchecked") void setUp() throws Exception {
         controls = new ChannelControls(GUILD, new ChannelSettings(directory.resolve("settings.properties")));
@@ -104,8 +110,9 @@ class GvdListenerTest {
         verify(message, never()).reply(anyString());
     }
 
-    @Test @SuppressWarnings("unchecked") void slashCommandsPersistAndAcknowledgePrivately() throws Exception {
+    @SuppressWarnings("unchecked") void prepareSlashCommand() {
         var event = mock(SlashCommandInteractionEvent.class);
+        commandEvent = event;
         when(event.getName()).thenReturn("gvd");
         when(event.getSubcommandName()).thenReturn("skipch");
         when(event.getUser()).thenReturn(user);
@@ -114,6 +121,7 @@ class GvdListenerTest {
         var channel = mock(GuildChannelUnion.class);
         when(channel.getGuild()).thenReturn(guild);
         when(channel.getId()).thenReturn(CHANNEL);
+        when(channel.getAsMention()).thenReturn("<#" + CHANNEL + ">");
         when(channel.getType()).thenReturn(ChannelType.TEXT);
         var option = mock(OptionMapping.class);
         when(option.getAsChannel()).thenReturn(channel);
@@ -121,6 +129,7 @@ class GvdListenerTest {
         var deferred = mock(ReplyCallbackAction.class);
         when(event.deferReply(true)).thenReturn(deferred);
         var hook = mock(InteractionHook.class);
+        commandHook = hook;
         WebhookMessageEditAction<Message> edit = mock(WebhookMessageEditAction.class, RETURNS_SELF);
         when(hook.editOriginal(anyString())).thenReturn(edit);
         doAnswer(invocation -> {
@@ -129,16 +138,75 @@ class GvdListenerTest {
             return null;
         }).when(deferred).queue(any(), any());
 
-        listener.onSlashCommandInteraction(event);
-        verify(event).deferReply(true);
-        verify(hook).editOriginal(contains("停止しました"));
-        var reloaded = new ChannelSettings(directory.resolve("settings.properties"));
-        assertTrue(reloaded.isSkipped(GUILD, CHANNEL, null));
+        logChannel = mock(TextChannel.class);
+        when(guild.getSystemChannel()).thenReturn(logChannel);
+        logPost = mock(MessageCreateAction.class, RETURNS_SELF);
+        when(logChannel.sendMessage(anyString())).thenReturn(logPost);
+        doAnswer(invocation -> {
+            Consumer<Message> success = invocation.getArgument(0);
+            success.accept(message);
+            return null;
+        }).when(logPost).queue(any(), any());
+    }
 
-        when(event.getSubcommandName()).thenReturn("readch");
-        listener.onSlashCommandInteraction(event);
+    @Test void slashCommandsPersistAndPostNormallyInSystemChannel() throws Exception {
+        prepareSlashCommand();
+        listener.onSlashCommandInteraction(commandEvent);
+        verify(commandEvent).deferReply(true);
+        verify(logChannel).sendMessage("<#" + CHANNEL + "> はROMりません");
+        verify(logPost).setAllowedMentions(argThat(Collection::isEmpty));
+        verify(commandHook).editOriginal("デフォルトログチャンネルに結果を投稿しました。");
+        assertTrue(new ChannelSettings(directory.resolve("settings.properties")).isSkipped(GUILD, CHANNEL, null));
+
+        when(commandEvent.getSubcommandName()).thenReturn("readch");
+        listener.onSlashCommandInteraction(commandEvent);
         assertFalse(new ChannelSettings(directory.resolve("settings.properties")).isSkipped(GUILD, CHANNEL, null));
-        verify(hook).editOriginal(contains("再開しました"));
+        verify(logChannel).sendMessage("<#" + CHANNEL + "> はROMります");
+        verify(commandEvent, never()).reply(anyString());
+    }
+
+    @Test void missingSystemChannelReportsSavedSettingWithoutPosting() throws Exception {
+        prepareSlashCommand();
+        when(guild.getSystemChannel()).thenReturn(null);
+        listener.onSlashCommandInteraction(commandEvent);
+        assertTrue(controlsShouldSkip());
+        verify(commandHook).editOriginal(contains("未設定"));
+        verifyNoInteractions(logChannel);
+    }
+
+    @Test void saveFailureDoesNotPostSuccessOrChangeSettings() throws Exception {
+        prepareSlashCommand();
+        Files.createDirectory(directory.resolve("settings.properties"));
+        Files.writeString(directory.resolve("settings.properties/blocker"), "block");
+        listener.onSlashCommandInteraction(commandEvent);
+        assertFalse(controlsShouldSkip());
+        verify(commandHook).editOriginal("保存できなかったため、設定は変更していません。");
+        verifyNoInteractions(logChannel);
+    }
+
+    @Test void asynchronousPostFailureReportsThatSettingsWereSaved() throws Exception {
+        prepareSlashCommand();
+        doAnswer(invocation -> {
+            Consumer<Throwable> failure = invocation.getArgument(1);
+            failure.accept(new IllegalStateException());
+            return null;
+        }).when(logPost).queue(any(), any());
+        listener.onSlashCommandInteraction(commandEvent);
+        assertTrue(controlsShouldSkip());
+        verify(commandHook).editOriginal(contains("投稿に失敗しました"));
+        verify(commandHook, never()).editOriginal("デフォルトログチャンネルに結果を投稿しました。");
+    }
+
+    @Test void synchronousPostFailureReportsThatSettingsWereSaved() throws Exception {
+        prepareSlashCommand();
+        when(logChannel.sendMessage(anyString())).thenThrow(new IllegalStateException());
+        listener.onSlashCommandInteraction(commandEvent);
+        assertTrue(controlsShouldSkip());
+        verify(commandHook).editOriginal(contains("投稿に失敗しました"));
+    }
+
+    private boolean controlsShouldSkip() {
+        return !controls.shouldRespond(GUILD, CHANNEL, null, false, false, MessageType.DEFAULT);
     }
 
     @Test void otherGvdSubcommandsAreLeftForTheirOwnHandlers() {
