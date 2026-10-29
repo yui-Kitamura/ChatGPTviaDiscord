@@ -48,11 +48,25 @@ class AiConversationTest {
                 var h=event(USER,true,"post-"+n,"question");
                 var settings=new ResponseSettings(directory.resolve("response.properties"));settings.setMode(ChannelControlsTest.CHANNEL,ResponseMode.THREAD);
                 if(n==2){var role=mock(net.dv8tion.jda.api.entities.Role.class);when(role.getId()).thenReturn("456789012345678901");when(h.message.getMentions().getRoles()).thenReturn(List.of(role));}
-                var done=new CountDownLatch(1);doAnswer(i->{done.countDown();return null;}).when(h.reply).queue(any(),any());
+                var channel=h.messageEvent.getChannel();
+                when(h.message.getChannel()).thenReturn(channel);
+                when(h.message.getGuild()).thenReturn(h.guild);
+                var postAction=mock(net.dv8tion.jda.api.requests.restaction.MessageCreateAction.class,RETURNS_SELF);
+                when(h.messageEvent.getChannel().sendMessage(anyString())).thenReturn(postAction);
+                var sent=mock(Message.class);when(sent.getId()).thenReturn("98765432109876543"+n);
+                String key=ChannelControlsTest.CHANNEL+"-"+UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                Path historyFile=directory.resolve("history").resolve(key+".json");
+                var beforeSend=new AtomicLong(Long.MAX_VALUE);
+                when(postAction.complete()).thenAnswer(i->{beforeSend.set(java.nio.file.Files.size(historyFile));return sent;});
                 try(var ai=new AiConversation(access,h.controls,session,transport,settings,new ChatHistory(directory.resolve("history")),"guide",guild->gateway)){
-                    ai.accept(h.messageEvent);assertTrue(done.await(5,TimeUnit.SECONDS));
+                    ai.accept(h.messageEvent);
+                    assertTimeoutPreemptively(Duration.ofSeconds(5),()->{
+                        while(beforeSend.get()==Long.MAX_VALUE||java.nio.file.Files.size(historyFile)<=beforeSend.get())Thread.sleep(10);
+                    });
                 }
-                verify(h.message).reply(contains(n+"：名無しの案内人"));
+                verify(h.message).reply(startsWith("発言サマリ：説明を求めている。"));
+                verify(h.messageEvent.getChannel()).sendMessage(contains(n+"：案内人 <@&456789012345678901>"));
+                if(n==2)verify(postAction).setMessageReference("987654321098765431");
                 assertEquals(1,settings.characters().size());
             }
             assertEquals(1,created.get());assertEquals(2,calls.get());

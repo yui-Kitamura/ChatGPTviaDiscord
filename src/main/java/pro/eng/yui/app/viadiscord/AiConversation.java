@@ -51,15 +51,16 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
             prompt+=CharacterReply.instructions(context,saved.nextPost);
             String response=transport.respond(account.accessToken,account.model,prompt,input);
             if(!session.isCurrent(event.getGuild().getId(),account)||!access.permits(event.getGuild().getMemberById(user))||!controls.shouldRespond(event.getGuild().getId(),event.getChannel().getId(),parent,false,false,message.getType()))return;
-            String display=response;
+            CharacterReply generated=null;
+            List<ResponseSettings.CharacterRole> roles=List.of();
+            long firstPost=saved.nextPost;
             if(context.mode()==ResponseMode.THREAD) {
-                final CharacterReply generated;
                 try {generated=CharacterReply.parse(response,context,saved.nextPost);}
                 catch(java.io.IOException|IllegalArgumentException e) {
                     reply(message,"キャラ応答の形式を確認できなかったため、ロール作成・回答の確定は行っていません。自動再試行はしていません。");return;
                 }
                 if(characterRoles==null)characterRoles=new CharacterRoles(settings,roleGateway.apply(event.getGuild()));
-                try {characterRoles.ensureCharacters(generated.characters(),()->{
+                try {roles=characterRoles.ensureCharacters(generated.characters(),()->{
                     try {return session.isCurrent(event.getGuild().getId(),account)&&access.permits(event.getGuild().getMemberById(user))
                             &&settings.mode(event.getChannel().getId())==context.mode()
                             &&controls.shouldRespond(event.getGuild().getId(),event.getChannel().getId(),parent,false,false,message.getType());}
@@ -69,11 +70,12 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
                     reply(message,"キャラのロール作成・保存を完了できませんでした。Bot のロール管理権限・階層・保存先と利用許可を確認してください。回答は確定していません。");return;
                 }
                 if(!session.isCurrent(event.getGuild().getId(),account)||!access.permits(event.getGuild().getMemberById(user)))return;
-                display=generated.display(saved.nextPost);saved.nextPost+=generated.posts().size();
+                saved.nextPost+=generated.posts().size();
             }
             saved.turns=input;saved.turns.add(Map.of("role","assistant","content",response));saved.ids.add(message.getId());
             history.save(key,saved);
-            reply(message,display);
+            if(generated==null)reply(message,response);
+            else ThreadReplySender.send(message,generated,firstPost,roles,saved,()->history.save(key,saved));
         }catch(ServerModelContext.Unavailable error){reply(message,error.getMessage());}
         catch(ChatGptException error){error.log();reply(message,error.userMessage());}
         catch(Exception error){System.err.println("GVD_AI_FAILED error_type="+error.getClass().getSimpleName());reply(message,"応答または会話の保存を完了できませんでした。時間を置いて再投稿してください。自動再試行はしていません。");}
