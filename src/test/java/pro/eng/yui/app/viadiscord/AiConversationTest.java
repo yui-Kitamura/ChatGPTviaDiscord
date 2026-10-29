@@ -28,6 +28,57 @@ class AiConversationTest {
         a.scope="chatgpt.tokens.use.direct";a.expiresAt=Instant.now().plusSeconds(3600).getEpochSecond();a.model="chosen";
         accounts.put(ChatGptAccounts.key(ChannelControlsTest.GUILD,"default"),a,true);
     }
+    @Test void threadCreatesAndReusesRolesWithPersistentNumbersAndMentionContext() throws Exception {
+        var calls=new AtomicInteger();var prompt=new AtomicReference<String>();
+        var transport=new OpenAiTransport(Duration.ofSeconds(3)){
+            @Override String respond(String token,String model,String instructions,List<Map<String,String>> turns){
+                prompt.set(instructions);int n=calls.incrementAndGet();
+                return CharacterReplyTest.REPLY.replace("[4]",n==1?"[]":"[1]");
+            }
+        };
+        var created=new AtomicInteger();
+        var gateway=new CharacterRoles.RoleGateway(){
+            public boolean exists(String id){return "456789012345678901".equals(id);}
+            public String create(String name){assertEquals("GvD: 案内人",name);created.incrementAndGet();return "456789012345678901";}
+        };
+        try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)){
+            account(accounts);var access=new AiAccess(directory,ROLE);
+            for(int n=1;n<=2;n++) {
+                var h=event(USER,true,"post-"+n,"question");
+                var settings=new ResponseSettings(directory.resolve("response.properties"));settings.setMode(ChannelControlsTest.CHANNEL,ResponseMode.THREAD);
+                if(n==2){var role=mock(net.dv8tion.jda.api.entities.Role.class);when(role.getId()).thenReturn("456789012345678901");when(h.message.getMentions().getRoles()).thenReturn(List.of(role));}
+                var done=new CountDownLatch(1);doAnswer(i->{done.countDown();return null;}).when(h.reply).queue(any(),any());
+                try(var ai=new AiConversation(access,h.controls,session,transport,settings,new ChatHistory(directory.resolve("history")),"guide",guild->gateway)){
+                    ai.accept(h.messageEvent);assertTrue(done.await(5,TimeUnit.SECONDS));
+                }
+                verify(h.message).reply(contains(n+"：名無しの案内人"));
+                assertEquals(1,settings.characters().size());
+            }
+            assertEquals(1,created.get());assertEquals(2,calls.get());
+            assertTrue(prompt.get().contains("先頭レス番号: 2"));assertTrue(prompt.get().contains("今回メンションされたキャラ名: [\"案内人\"]"));
+            String key=ChannelControlsTest.CHANNEL+"-"+UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            var saved=new ChatHistory(directory.resolve("history")).load(key);
+            assertEquals(3,saved.nextPost);assertEquals(4,saved.turns.size());
+            assertTrue(saved.turns.get(1).get("content").contains("\"characters\""));
+        }
+    }
+
+    @Test void failedRoleCreationDoesNotCommitAnswerOrAdvanceNumbers() throws Exception {
+        var transport=new OpenAiTransport(Duration.ofSeconds(3)){
+            @Override String respond(String token,String model,String instructions,List<Map<String,String>> turns){return CharacterReplyTest.REPLY.replace("[4]","[]");}
+        };
+        try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)){
+            account(accounts);var h=event(USER,true,"post","question");var settings=new ResponseSettings(directory.resolve("response.properties"));
+            settings.setMode(ChannelControlsTest.CHANNEL,ResponseMode.THREAD);
+            var gateway=new CharacterRoles.RoleGateway(){public boolean exists(String id){return false;}public String create(String name){throw new IllegalStateException("private details");}};
+            var done=new CountDownLatch(1);doAnswer(i->{done.countDown();return null;}).when(h.reply).queue(any(),any());
+            try(var ai=new AiConversation(new AiAccess(directory,ROLE),h.controls,session,transport,settings,new ChatHistory(directory.resolve("history")),"guide",guild->gateway)){
+                ai.accept(h.messageEvent);assertTrue(done.await(5,TimeUnit.SECONDS));
+            }
+            verify(h.message).reply(contains("ロール作成・保存を完了できません"));
+            assertTrue(settings.characters().isEmpty());assertFalse(java.nio.file.Files.exists(directory.resolve("history")));
+        }
+    }
     @Test void twoDiscordUsersUseSharedAccountAndConversationSurvivesReopen() throws Exception {
         var input=new AtomicReference<List<Map<String,String>>>();var calls=new AtomicInteger();
         var transport=new OpenAiTransport(Duration.ofSeconds(3)){
