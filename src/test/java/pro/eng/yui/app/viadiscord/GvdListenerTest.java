@@ -153,7 +153,7 @@ class GvdListenerTest {
         prepareSlashCommand();
         listener.onSlashCommandInteraction(commandEvent);
         verify(commandEvent).deferReply(true);
-        verify(logChannel).sendMessage("<#" + CHANNEL + "> はROMりません");
+        verify(logChannel).sendMessage("<#" + CHANNEL + "> ではROMります");
         verify(logPost).setAllowedMentions(argThat(Collection::isEmpty));
         verify(commandHook).editOriginal("デフォルトログチャンネルに結果を投稿しました。");
         assertTrue(new ChannelSettings(directory.resolve("settings.properties")).isSkipped(GUILD, CHANNEL, null));
@@ -161,7 +161,7 @@ class GvdListenerTest {
         when(commandEvent.getSubcommandName()).thenReturn("readch");
         listener.onSlashCommandInteraction(commandEvent);
         assertFalse(new ChannelSettings(directory.resolve("settings.properties")).isSkipped(GUILD, CHANNEL, null));
-        verify(logChannel).sendMessage("<#" + CHANNEL + "> はROMります");
+        verify(logChannel).sendMessage("<#" + CHANNEL + "> ではROMりません");
         verify(commandEvent, never()).reply(anyString());
     }
 
