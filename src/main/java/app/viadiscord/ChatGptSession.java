@@ -24,7 +24,7 @@ final class ChatGptSession implements AutoCloseable {
     private final Set<String> unsafeRefresh=new HashSet<>();
     private final String callback;
     private record Attempt(String key,String state,String nonce,String verifier,String ticket,String client,String subject,
-                           String hint,Instant expires,long generation,BooleanSupplier permitted,Consumer<String> result) {}
+                           String hint,boolean needsConsent,Instant expires,long generation,BooleanSupplier permitted,Consumer<String> result) {}
     ChatGptSession(ChatGptAccounts accounts,OpenAiTransport transport,int port) throws IOException {
         this.accounts=accounts;this.transport=transport;
         server=HttpServer.create(new InetSocketAddress("127.0.0.1",port),8);
@@ -39,7 +39,7 @@ final class ChatGptSession implements AutoCloseable {
         attempts.values().removeIf(a->a.expires.isBefore(Instant.now())||a.key.startsWith(user+":"));
         if(attempts.size()>=64)throw new IOException("Too many pending sign-ins.");
         var a=new Attempt(key,random(),random(),random(),random(),old==null?"":old.clientId,old==null?"":old.subject,
-                old==null?"":old.idToken,Instant.now().plusSeconds(600),generations.merge(key,1L,Long::sum),permitted,result);
+                old==null?"":old.idToken,old!=null&&!old.canInvoke(),Instant.now().plusSeconds(600),generations.merge(key,1L,Long::sum),permitted,result);
         attempts.put(a.state,a);
         return callback.replace("/callback","/start")+"?ticket="+a.ticket;
     }
@@ -49,6 +49,7 @@ final class ChatGptSession implements AutoCloseable {
         values.put("client_id",a.client.isEmpty()?"dynamic_agent_client":a.client);
         if(a.client.isEmpty())values.put("agent_name_hint","ChatGPTviaDiscord");
         else if(!a.hint.isEmpty())values.put("id_token_hint",a.hint);
+        if(a.needsConsent)values.put("prompt","consent");
         values.put("ext_agent_host_id",accounts.hostId());values.put("response_type","code");values.put("redirect_uri",callback);
         values.put("scope",SCOPES);values.put("resource",OpenAiTransport.RESOURCE);values.put("state",a.state);values.put("nonce",a.nonce);
         values.put("code_challenge_method","S256");
