@@ -9,3 +9,4 @@
 !/config/*.properties.example
 /dependency-reduced-pom.xml
 *.env
+__pycache__/

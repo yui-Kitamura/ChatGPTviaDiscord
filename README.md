@@ -38,8 +38,11 @@ JAR、systemd unit、コミット SHA、チェックサムを同一 run の arti
 | --- | --- |
 | `VPS_HOST` | 接続先 |
 | `VPS_USERNAME` | デプロイ用 SSH ユーザー |
-| `VPS_PASSWORD` | SSH パスワード |
+| `VPS_PASSWORD` | SSH パスワード。sudo 用パスワードの既定値にも使う。 |
+| `VPS_SUDO_PASSWORD` | 任意。sudo のパスワードが SSH と異なる場合に指定する。 |
 | `VPS_HOST_FINGERPRINT` | 接続先 SSH ホスト鍵の SHA256 fingerprint |
+
+必要な Secrets の存在・fingerprint の形式を先に確認する。SSH の接続先・ホスト鍵・ログイン認証・sudo 認証の確認は、次の Prepare ステップで行う。fingerprint は実際に接続で選択されるホスト鍵の値を登録し、鍵種を Ed25519 に固定して取得しない。
 
 Repository Variable `VPS_PORT` は省略時 22。Bot トークンや ChatGPT の認証情報はこれらの設定と分け、VPS 側で管理する。JAR や Actions artifact に埋め込まない。
 
@@ -47,8 +50,10 @@ Repository Variable `VPS_PORT` は省略時 22。Bot トークンや ChatGPT の
 
 - Linux、Java 21、`tar`、`sha256sum`、systemd を用意する。
 - `/etc/chatgptviadiscord.env` を事前に配置する。CI は内容を表示・上書きせず、所有者 root:root・権限 600 を適用する。
-- デプロイ用 SSH ユーザーが、パスワードなしの `sudo -n` で専用ディレクトリ・ユーザー・unit の作成、権限設定、systemctl、journalctl を実行できるようにする。
+- デプロイ用 SSH ユーザーに、専用ディレクトリ・ユーザー・unit の作成、権限設定、systemctl、journalctl を実行する sudo 権限が必要。パスワード不要の sudo 設定は必須としない。
 - Java 21 の java コマンドを `/usr/bin/java` に用意する。CI は JRE のインストールや OS 更新は行わない。
+
+root 接続では直接コマンドを実行する。一般ユーザー接続では `sudo -S` にパスワードを標準入力で渡す。既定は `VPS_PASSWORD`、別のパスワードなら `VPS_SUDO_PASSWORD` を使う。パスワードを sudo のコマンド引数や永続ファイルへ書かず、build へも渡さない。認証・コマンドエラーは失敗として返す。
 
 deploy が `/opt/chatgptviadiscord/releases/` を準備し、専用ユーザーと systemd unit を作成・更新する。unit の `StateDirectory` により `/var/lib/chatgptviadiscord` を作り、履歴や認証などは release の外に保持する。
 
