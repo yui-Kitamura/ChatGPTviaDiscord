@@ -14,7 +14,7 @@ import net.dv8tion.jda.api.events.session.ShutdownEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import net.dv8tion.jda.api.requests.GatewayIntent;
 
-/** Discord message acknowledgements and persisted channel response controls. */
+/** Discord message acknowledgements, channel controls, and AI limit guidance. */
 public final class BotApplication {
     private BotApplication() {}
 
@@ -66,6 +66,7 @@ public final class BotApplication {
                     .setStatus(OnlineStatus.ONLINE)
                     .setAutoReconnect(true)
                     .setEnableShutdownHook(true)
+                    .addEventListeners(new LimitCommandListener(config.guildId()))
                     .addEventListeners(new ModeCommandListener(config.guildId(), responseSettings))
                     .addEventListeners(commands, new ListenerAdapter() {
                         @Override

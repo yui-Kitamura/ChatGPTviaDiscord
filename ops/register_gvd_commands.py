@@ -11,7 +11,7 @@ API = 'https://discord.com/api/v10'
 def command_definition():
     return {
         'name': 'gvd',
-        'description': 'GvDのチャンネル応答設定',
+        'description': 'GvDの設定・AI利用枠の確認',
         'type': 1,
         'contexts': [0],
         'integration_types': [0],
@@ -34,6 +34,10 @@ def command_definition():
                 'type': 3, 'name': 'mode', 'description': '応答形式', 'required': True,
                 'choices': [{'name': name, 'value': name} for name in ['thread', 'qa']],
             }],
+        }, {
+            'type': 1,
+            'name': 'limit',
+            'description': 'AIの利用枠・残量と確認先を表示する',
         }],
     }
 
@@ -72,7 +76,7 @@ def register(token, opener=urlopen):
 def main():
     try:
         command_id = register(os.environ.get('DISCORD_BOT_TOKEN', '').strip())
-        print('GLOBAL_COMMAND_REGISTERED name=gvd id=' + command_id + ' subcommands=skipch,readch,mode')
+        print('GLOBAL_COMMAND_REGISTERED name=gvd id=' + command_id + ' subcommands=skipch,readch,mode,limit')
         return 0
     except HTTPError as error:
         print('Command registration failed: Discord HTTP status ' + str(error.code) + '.', file=sys.stderr)

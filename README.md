@@ -102,15 +102,24 @@ GitHub Secrets は保存後の値を読み出せない。オンライン確認�
 
 手動実行で register_commands_only を true にすると、指定 ref の /gvd 定義だけを登録する。通常の main 限定デプロイとは別の経路であり、current の切替・unit の更新・Bot の再起動は行わない。既に準備済みの VPS と Python 3 が必要。
 
-登録内容は次の 3 つ。グローバル登録し、使用コンテキストはギルドに限定する。
+登録内容は次の 4 つ。グローバル登録し、使用コンテキストはギルドに限定する。
 
 - /gvd skipch ch:チャンネル
 - /gvd readch ch:チャンネル
 - /gvd mode mode:thread または qa
+- /gvd limit
 
 VPS の既存 EnvironmentFile から Bot トークンを読み、Discord REST API のグローバルコマンド作成・更新エンドポイントに gvd だけを upsert する。他のコマンドをまとめて上書きしない。トークンは GitHub runner や成果物へ取り出さない。
 
 コマンド定義の登録とハンドラーのデプロイは別操作。定義だけを登録しても、実行にはハンドラーを含む JAR が必要。通常起動ではコマンドを再登録しない。/gvd auth は別の作業として扱う。
+
+## AI の利用枠・残量確認
+
+`/gvd limit` は設定対象サーバーの実行チャンネルに、全員が見える通常メッセージとして結果を返信する。現時点では Bot の AI 接続・認証が未実装のため、残量は「取得できません」、回復時刻は「不明」と表示し、[ChatGPT の設定 → Usage](https://chatgpt.com/settings/usage) を案内する。残量の数値取得は未実装。このコマンドから AI リクエストを送信せず、利用枠の消費や API キー課金への切替を行わない。
+
+ChatGPT プラン利用を第一候補とする既存要件に合わせた案内であり、API キー課金のクレジット残高やレート制限を表示するものではない。[公式のエラー処理](https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery) に従い、利用枠不足からアカウント全体の残量や回復時刻を推測しない。AI 接続の実装時に取得可能な情報を確認して拡張する。
+
+定義だけの先行登録では稼働中の Bot の処理は変わらない。`limit` の実行には、この変更を含む JAR のデプロイと再起動も必要。Discord 上での登録・表示・公開返信は別途実機確認する。
 
 ## 投稿への応答とチャンネル設定
 
