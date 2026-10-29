@@ -52,8 +52,8 @@ exec "$@"
 ''')
         workflow = WORKFLOW.read_text(encoding='utf-8')
         helpers = re.findall(r'(?ms)^            as_root\(\) \{\n.*?^            \}', workflow)
-        self.assertEqual(2, len(helpers))
-        self.assertEqual(helpers[0], helpers[1], 'All SSH steps must use the same authentication helper')
+        self.assertEqual(3, len(helpers))
+        self.assertTrue(all(helper == helpers[0] for helper in helpers), 'All SSH steps must use the same authentication helper')
         self.helper = '\n'.join(line[12:] for line in helpers[0].splitlines())
 
     def write(self, name, body):
@@ -105,7 +105,7 @@ exec "$@"
         workflow = WORKFLOW.read_text(encoding='utf-8')
         build = workflow.split('  build:\n', 1)[1].split('  deploy:\n', 1)[0]
         self.assertNotIn('secrets.', build)
-        self.assertEqual(2, workflow.count('VPS_SUDO_PASSWORD: ${{ secrets.VPS_SUDO_PASSWORD || secrets.VPS_PASSWORD }}'))
+        self.assertEqual(3, workflow.count('VPS_SUDO_PASSWORD: ${{ secrets.VPS_SUDO_PASSWORD || secrets.VPS_PASSWORD }}'))
         self.assertNotIn('sudo -n ', workflow)
 
 

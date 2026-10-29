@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      register_commands_only:
+        description: Register global /gvd definitions without restarting the Bot
+        type: boolean
+        required: true
+        default: false
 
 permissions:
   contents: read
@@ -62,8 +68,9 @@ jobs:
           mkdir -p dist
           cp -- "${jars[0]}" dist/chatgptviadiscord.jar
           cp ops/chatgptviadiscord.service dist/chatgptviadiscord.service
+          cp ops/register_gvd_commands.py dist/register_gvd_commands.py
           printf '%s\n' "$GITHUB_SHA" > dist/REVISION
-          (cd dist && sha256sum chatgptviadiscord.jar chatgptviadiscord.service REVISION > SHA256SUMS)
+          (cd dist && sha256sum chatgptviadiscord.jar chatgptviadiscord.service register_gvd_commands.py REVISION > SHA256SUMS)
 
       - name: Upload deployment artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -76,7 +83,7 @@ jobs:
   deploy:
     name: Deploy the built artifact to VPS
     needs: build
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && inputs.register_commands_only))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:
@@ -119,6 +126,7 @@ jobs:
           test "$(cat dist/REVISION)" = "$GITHUB_SHA"
 
       - name: Prepare the VPS release directory
+        if: ${{ !inputs.register_commands_only }}
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         env:
           VPS_SUDO_PASSWORD: ${{ secrets.VPS_SUDO_PASSWORD || secrets.VPS_PASSWORD }}
@@ -153,11 +161,12 @@ jobs:
           password: ${{ secrets.VPS_PASSWORD }}
           port: ${{ vars.VPS_PORT || '22' }}
           fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
-          source: dist/chatgptviadiscord.jar,dist/chatgptviadiscord.service,dist/REVISION,dist/SHA256SUMS
+          source: dist/chatgptviadiscord.jar,dist/chatgptviadiscord.service,dist/register_gvd_commands.py,dist/REVISION,dist/SHA256SUMS
           target: /opt/chatgptviadiscord/releases/${{ env.RELEASE_ID }}
           strip_components: 1
 
       - name: Activate the release and restart the service
+        if: ${{ !inputs.register_commands_only }}
         uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         env:
           VPS_SUDO_PASSWORD: ${{ secrets.VPS_SUDO_PASSWORD || secrets.VPS_PASSWORD }}
@@ -228,3 +237,41 @@ jobs:
             echo 'Discord readiness was not confirmed; reverting the release.' >&2
             rollback
             exit 1
+
+      - name: Register global commands without restarting the Bot
+        if: github.event_name == 'workflow_dispatch' && inputs.register_commands_only
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
+        env:
+          VPS_SUDO_PASSWORD: ${{ secrets.VPS_SUDO_PASSWORD || secrets.VPS_PASSWORD }}
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          password: ${{ secrets.VPS_PASSWORD }}
+          port: ${{ vars.VPS_PORT || '22' }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          envs: RELEASE_ID,VPS_SUDO_PASSWORD
+          command_timeout: 2m
+          script: |
+            set -eu
+            as_root() {
+              if [ "$(id -u)" -eq 0 ]; then
+                "$@"
+              else
+                printf '%s\n' "${VPS_SUDO_PASSWORD-}" | sudo -S -p '' -- "$@"
+              fi
+            }
+            release="/opt/chatgptviadiscord/releases/$RELEASE_ID"
+            cd "$release"
+            sha256sum --check SHA256SUMS
+            test "$(cat REVISION)" = "${RELEASE_ID%%-*}"
+            test -x /usr/bin/python3 || {
+              echo 'Python 3 is required on the VPS for command registration.' >&2
+              exit 1
+            }
+            as_root systemd-run --quiet --wait --collect --pipe \
+              --unit="gvd-register-$RELEASE_ID" \
+              --property=User=chatgptviadiscord \
+              --property=Group=chatgptviadiscord \
+              --property=EnvironmentFile=/etc/chatgptviadiscord.env \
+              --property=WorkingDirectory=/var/lib/chatgptviadiscord \
+              /usr/bin/python3 "$release/register_gvd_commands.py"
