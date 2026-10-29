@@ -26,7 +26,7 @@ class BotConfigTest {
         assertEquals("environment-token", config.token());
         assertEquals(GUILD, config.guildId());
         assertEquals(Duration.ofSeconds(60), config.startupTimeout());
-        assertEquals(Path.of("state"), config.stateDirectory());
+        assertEquals(Path.of("state").toAbsolutePath().normalize(), config.stateDirectory());
         assertFalse(config.toString().contains("environment-token"));
         assertFalse(config.toString().contains("file-token"));
     }
