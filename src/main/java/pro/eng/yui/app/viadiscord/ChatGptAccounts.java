@@ -21,6 +21,7 @@ final class ChatGptAccounts implements AutoCloseable {
         public String hostId="urn:uuid:"+UUID.randomUUID();
         public Map<String,Account> accounts=new TreeMap<>();
         public Map<String,String> active=new TreeMap<>();
+        public Map<String,String> pendingRegistrations=new TreeMap<>();
         public Data() {}
     }
     private final Path file;
@@ -36,7 +37,7 @@ final class ChatGptAccounts implements AutoCloseable {
         if (lock == null) { lockChannel.close(); throw new IOException("ChatGPT credential storage is already in use."); }
         try {
             data=Files.exists(file) ? JSON.readValue(Files.readString(file),Data.class) : new Data();
-            if(data.version!=1 || !data.hostId.matches("urn:uuid:[0-9a-f-]{36}") || data.accounts==null || data.active==null)
+            if(data.version!=1 || !data.hostId.matches("urn:uuid:[0-9a-f-]{36}") || data.accounts==null || data.active==null || data.pendingRegistrations==null)
                 throw new IOException("Invalid ChatGPT account storage.");
             if(!Files.exists(file)) save(); // Host ID exists before the first authorization.
         } catch(IOException|RuntimeException error) { close(); throw new IOException("ChatGPT account storage could not be loaded."); }
@@ -47,6 +48,14 @@ final class ChatGptAccounts implements AutoCloseable {
         return user+":"+label;
     }
     synchronized String hostId(){return data.hostId;}
+    synchronized String pendingClient(String key){return data.pendingRegistrations.getOrDefault(key,"");}
+    // Registration alone is not a verified identity and must never activate an account.
+    synchronized void rememberRegistration(String key,String client) throws IOException {
+        if(data.accounts.containsKey(key))return;
+        String old=JSON.writeValueAsString(data);
+        try {data.pendingRegistrations.put(key,client);save();}
+        catch(IOException e){data=JSON.readValue(old,Data.class);throw e;}
+    }
     synchronized Account get(String key) throws IOException {
         var account=data.accounts.get(key);
         return account==null ? null : JSON.readValue(JSON.writeValueAsString(account),Account.class);
@@ -61,6 +70,7 @@ final class ChatGptAccounts implements AutoCloseable {
         String old=JSON.writeValueAsString(data);
         try {
             data.accounts.put(key,account);
+            data.pendingRegistrations.remove(key);
             if(activate) data.active.put(key.split(":")[0],key);
             save();
         } catch(IOException e) {data=JSON.readValue(old,Data.class);throw e;}

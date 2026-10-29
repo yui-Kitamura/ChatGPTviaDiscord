@@ -116,6 +116,15 @@ class OpenAiTransport {
     private static ChatGptException failure(JsonNode node,int status) {
         var error=node.path("error");String code=error.isTextual()?error.asText():error.path("code").asText("request_failed");
         if(!code.matches("[a-zA-Z0-9_]{1,100}"))code="request_failed";
-        return new ChatGptException(code,status);
+        var failure=new ChatGptException(code,status);
+        // Descriptions are untrusted prose, not protocol reason codes. Retain only a coarse hint.
+        String description=node.path("error_description").asText(error.path("message").asText("")).toLowerCase(Locale.ROOT);
+        failure.descriptionHint=description.isBlank()?ChatGptException.DescriptionHint.NOT_PROVIDED
+                :description.contains("pkce")||description.contains("code_verifier")||description.contains("code verifier")?ChatGptException.DescriptionHint.PKCE
+                :description.contains("redirect_uri")||description.contains("redirect uri")?ChatGptException.DescriptionHint.REDIRECT_URI
+                :description.contains("authorization code")||description.contains("authorization_code")?ChatGptException.DescriptionHint.AUTHORIZATION_CODE
+                :description.contains("client_id")||description.contains("client id")?ChatGptException.DescriptionHint.CLIENT_BINDING
+                :ChatGptException.DescriptionHint.OTHER;
+        return failure;
     }
 }

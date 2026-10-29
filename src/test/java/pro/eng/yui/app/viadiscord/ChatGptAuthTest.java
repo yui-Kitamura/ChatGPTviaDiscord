@@ -91,6 +91,60 @@ class ChatGptAuthTest {
             assertEquals(400,callback(auth,query(auth).get("state"),CLIENT).statusCode());assertEquals(1,fake.exchanges);
         }
     }
+    @Test void invalidGrantRetainsRegistrationAcrossRestartButRequiresFreshAuthorization() throws Exception {
+        var fake=new Fake();String key=ChatGptAccounts.key(USER,"default");Map<String,String> first;
+        try(var accounts=new ChatGptAccounts(directory);var session=new ChatGptSession(accounts,fake,0)) {
+            var result=new AtomicReference<String>();var notified=new CountDownLatch(1);
+            var auth=authorize(session.login(USER,"default",()->true,text->{result.set(text);notified.countDown();}),fake);first=query(auth);
+            fake.fail=new ChatGptException("invalid_grant",400);
+            assertEquals(400,callback(auth,first.get("state"),CLIENT).statusCode());
+            assertEquals(CLIENT,accounts.pendingClient(key));assertNull(accounts.get(key));assertNull(accounts.activeKey(USER));
+            assertEquals("login_required",assertThrows(ChatGptException.class,()->session.ready(USER)).code);
+            assertTrue(notified.await(5,TimeUnit.SECONDS));assertTrue(result.get().contains("新しく発行されたリンク"));
+            var usedFields=fake.fields;
+            assertEquals(400,callback(auth,first.get("state"),CLIENT).statusCode());assertSame(usedFields,fake.fields);
+        }
+        fake.fail=null;
+        try(var accounts=new ChatGptAccounts(directory);var session=new ChatGptSession(accounts,fake,0)) {
+            var auth=authorize(session.login(USER,"default",()->true,t->{}),fake);var retry=query(auth);
+            assertEquals(CLIENT,retry.get("client_id"));assertFalse(retry.containsKey("agent_name_hint"));assertFalse(retry.containsKey("id_token_hint"));
+            for(String value:List.of("state","nonce","code_challenge"))assertNotEquals(first.get(value),retry.get(value));
+            assertEquals(first.get("ext_agent_host_id"),retry.get("ext_agent_host_id"));
+            // A returning callback may omit client_id. Bind it to the retained registration.
+            var uri=URI.create(retry.get("redirect_uri")+"?"+OpenAiTransport.form(Map.of("state",retry.get("state"),"code","fresh-code")));
+            assertEquals(200,browser.send(HttpRequest.newBuilder(uri).GET().build(),HttpResponse.BodyHandlers.ofString()).statusCode());
+            assertEquals("fresh-code",fake.fields.get("code"));assertEquals(CLIENT,fake.fields.get("client_id"));
+            assertEquals("",accounts.pendingClient(key));assertEquals("owner",session.ready(USER).subject);
+        }
+    }
+    @Test void otherExchangeErrorsDoNotRetainRegistrationAndMismatchedClientCannotReplaceAccount() throws Exception {
+        var fake=new Fake();String key=ChatGptAccounts.key(USER,"default");
+        try(var accounts=new ChatGptAccounts(directory);var session=new ChatGptSession(accounts,fake,0)) {
+            var auth=authorize(session.login(USER,"default",()->true,t->{}),fake);
+            fake.fail=new ChatGptException("invalid_client",400);
+            assertEquals(400,callback(auth,query(auth).get("state"),CLIENT).statusCode());assertEquals("",accounts.pendingClient(key));
+            fake.fail=null;auth=authorize(session.login(USER,"default",()->true,t->{}),fake);
+            assertEquals(200,callback(auth,query(auth).get("state"),CLIENT).statusCode());
+            auth=authorize(session.login(USER,"default",()->true,t->{}),fake);
+            assertEquals(400,callback(auth,query(auth).get("state"),"other-client").statusCode());
+            assertEquals(1,fake.exchanges);assertEquals(CLIENT,session.ready(USER).clientId);
+        }
+    }
+    @Test void cancelledExchangeCannotPersistAnUnverifiedRegistration() throws Exception {
+        var entered=new CountDownLatch(1);var release=new CountDownLatch(1);
+        var fake=new Fake(){@Override synchronized JsonNode tokens(Map<String,String> fields) throws IOException {
+            entered.countDown();try{if(!release.await(5,TimeUnit.SECONDS))throw new IOException("Test timed out.");}
+            catch(InterruptedException e){Thread.currentThread().interrupt();throw new IOException(e);}
+            throw new ChatGptException("invalid_grant",400);
+        }};
+        try(var accounts=new ChatGptAccounts(directory);var session=new ChatGptSession(accounts,fake,0);var pool=Executors.newVirtualThreadPerTaskExecutor()) {
+            var auth=authorize(session.login(USER,"default",()->true,t->{}),fake);
+            var response=pool.submit(()->callback(auth,query(auth).get("state"),CLIENT));
+            try{assertTrue(entered.await(5,TimeUnit.SECONDS));session.logout(USER,"default");}finally{release.countDown();}
+            assertEquals(400,response.get(5,TimeUnit.SECONDS).statusCode());
+            assertEquals("",accounts.pendingClient(ChatGptAccounts.key(USER,"default")));assertNull(accounts.activeKey(USER));
+        }
+    }
     @Test void missingScopeStoresIdentityButBlocksInference() throws Exception {
         var fake=new Fake();fake.scopes="openid email";
         try(var accounts=new ChatGptAccounts(directory);var session=new ChatGptSession(accounts,fake,0)) {

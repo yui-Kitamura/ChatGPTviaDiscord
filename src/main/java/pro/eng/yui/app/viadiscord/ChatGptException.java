@@ -7,6 +7,8 @@ final class ChatGptException extends IOException {
     final String code;
     final int status;
     String requestId="";
+    enum DescriptionHint { NOT_PROVIDED, PKCE, REDIRECT_URI, AUTHORIZATION_CODE, CLIENT_BINDING, OTHER }
+    DescriptionHint descriptionHint=DescriptionHint.NOT_PROVIDED;
     ChatGptException(String code, int status) { super("ChatGPT request failed (" + code + ", HTTP " + status + ")."); this.code=code; this.status=status; }
     void log() {System.err.printf("GVD_OPENAI_FAILED http_status=%d code=%s request_id=%s%n",status,code,requestId);}
     String userMessage() {

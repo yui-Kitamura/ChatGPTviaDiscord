@@ -87,6 +87,10 @@ sudo journalctl -u chatgptviadiscord.service -f -o cat
 
 認証失敗は `GVD_AUTH_FAILED`、接続完了は `GVD_AUTH_CONNECTED` を探す。失敗行には `stage`（処理段階）、`reason`（IDトークン検証理由）、`http_status`、既知の `oauth_code`、OpenAIの `request_id` を出す。callback URL・コード・トークン・state・nonce・メール・例外本文は記録しない。
 
+`description_hint` はOpenAIのエラー説明に含まれる語から分類した補助情報。`PKCE`・`REDIRECT_URI`・`AUTHORIZATION_CODE`・`CLIENT_BINDING`・`OTHER`・`NOT_PROVIDED` の固定値だけを記録し、説明本文は保存しない。原因の確定情報ではなく、`AUTHORIZATION_CODE` だけでは期限切れ・使用済みなどを区別できない。
+
+コード交換で `invalid_grant` が返った場合、使用したコードは再送しない。発行済みクライアントIDを未検証の登録情報として保護ファイルに保持し、`GVD_AUTH_RETRY registration_retained=true fresh_authorization_required=true` を記録する。Discordで **新しく `/gvd auth` を実行して発行されたリンク**を使う。Bot再起動後も登録情報は残るが、本人確認とトークン検証が成功するまではAI接続として有効化しない。保持に失敗した場合は `REGISTRATION_SAVE` の失敗ログが出る。
+
 - `TOKEN_EXCHANGE`：OpenAIへの認証コード交換で失敗。
 - `SIGNING_KEYS`：公開署名鍵の取得で失敗。
 - `ID_TOKEN_VERIFY`：IDトークンの検証で失敗。`NONCE`・`SIGNATURE`・`ISSUER`・`AUDIENCE` などで理由を示す。

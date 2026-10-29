@@ -20,9 +20,10 @@ class AuthDiagnosticsTest {
         assertFalse(log.contains(secret));
     }
     @Test void knownTokenErrorsKeepOnlySafeProtocolDiagnostics() throws Exception {
-        var error=new ChatGptException("invalid_grant",400);error.requestId="req_test123";
+        var error=new ChatGptException("invalid_grant",400);error.requestId="req_test123";error.descriptionHint=ChatGptException.DescriptionHint.PKCE;
         String log=capture(()->AuthDiagnostics.failure(AuthDiagnostics.Stage.TOKEN_EXCHANGE,error,""));
         assertTrue(log.contains("http_status=400 oauth_code=invalid_grant request_id=req_test123"));
+        assertTrue(log.contains("description_hint=PKCE"));
     }
     @Test void identityRejectionsHaveSpecificReasonsWithoutClaims() throws Exception {
         String log=capture(()->AuthDiagnostics.failure(AuthDiagnostics.Stage.ID_TOKEN_VERIFY,new OpenAiIdentity.ValidationFailure(OpenAiIdentity.Reason.NONCE),""));

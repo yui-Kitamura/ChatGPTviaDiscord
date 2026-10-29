@@ -38,7 +38,7 @@ final class ChatGptSession implements AutoCloseable {
         String key=ChatGptAccounts.key(user,label);var old=accounts.get(key);
         attempts.values().removeIf(a->a.expires.isBefore(Instant.now())||a.key.startsWith(user+":"));
         if(attempts.size()>=64)throw new IOException("Too many pending sign-ins.");
-        var a=new Attempt(key,random(),random(),random(),random(),old==null?"":old.clientId,old==null?"":old.subject,
+        var a=new Attempt(key,random(),random(),random(),random(),old==null?accounts.pendingClient(key):old.clientId,old==null?"":old.subject,
                 old==null?"":old.idToken,old!=null&&!old.canInvoke(),Instant.now().plusSeconds(600),generations.merge(key,1L,Long::sum),permitted,result);
         attempts.put(a.state,a);
         return callback.replace("/callback","/start")+"?ticket="+a.ticket;
@@ -72,6 +72,7 @@ final class ChatGptSession implements AutoCloseable {
         Attempt attempt=null;
         var stage=AuthDiagnostics.Stage.CALLBACK_REQUEST;
         String callbackError="";
+        boolean registrationRetained=false;
         try {
             if(!validRequest(exchange,"/auth/callback")){AuthDiagnostics.failure(stage,new IOException(),"");reply(exchange,400,"Invalid request.");return;}
             stage=AuthDiagnostics.Stage.CALLBACK_QUERY;
@@ -91,8 +92,21 @@ final class ChatGptSession implements AutoCloseable {
             stage=AuthDiagnostics.Stage.CALLBACK_CODE;
             String code=query.get("code");if(code==null||code.isBlank())throw new IOException("Missing authorization code.");
             stage=AuthDiagnostics.Stage.TOKEN_EXCHANGE;
-            var response=transport.tokens(Map.of("grant_type","authorization_code","client_id",client,"code",code,
-                    "code_verifier",attempt.verifier,"redirect_uri",callback,"resource",OpenAiTransport.RESOURCE));
+            JsonNode response;
+            try {
+                response=transport.tokens(Map.of("grant_type","authorization_code","client_id",client,"code",code,
+                        "code_verifier",attempt.verifier,"redirect_uri",callback,"resource",OpenAiTransport.RESOURCE));
+            } catch(ChatGptException error) {
+                if("invalid_grant".equals(error.code)) {
+                    synchronized(this) {
+                        if(Objects.equals(generations.get(attempt.key),attempt.generation)&&attempt.permitted.getAsBoolean()) {
+                            try {accounts.rememberRegistration(attempt.key,client);registrationRetained=true;}
+                            catch(IOException storageFailure){AuthDiagnostics.failure(AuthDiagnostics.Stage.REGISTRATION_SAVE,storageFailure,"");}
+                        }
+                    }
+                }
+                throw error;
+            }
             stage=AuthDiagnostics.Stage.ID_TOKEN_PARSE;
             var token=SignedJWT.parse(response.path("id_token").asText());
             stage=AuthDiagnostics.Stage.SIGNING_KEYS;
@@ -118,8 +132,11 @@ final class ChatGptSession implements AutoCloseable {
             reply(exchange,200,"ChatGPT sign-in complete. Return to Discord.");safeResult(attempt,status);
         } catch(Exception failure) {
             AuthDiagnostics.failure(stage,failure,callbackError);
+            if(registrationRetained)System.err.println("GVD_AUTH_RETRY registration_retained=true fresh_authorization_required=true");
             reply(exchange,400,"ChatGPT sign-in failed. Return to Discord and run /gvd auth again.");
-            if(attempt!=null)safeResult(attempt,"ChatGPTへの接続が完了しませんでした。同意・アカウント・Workspaceを確認し、/gvd auth を再実行してください。");
+            if(attempt!=null)safeResult(attempt,registrationRetained
+                    ?"認可コードの交換が拒否されました。登録情報は保持しています。/gvd auth を再実行し、新しく発行されたリンクでログインしてください。"
+                    :"ChatGPTへの接続が完了しませんでした。同意・アカウント・Workspaceを確認し、/gvd auth を再実行してください。");
         }
     }
     private static void safeResult(Attempt a,String text){try{a.result.accept(text);}catch(RuntimeException ignored){}}

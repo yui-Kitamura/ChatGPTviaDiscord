@@ -25,6 +25,28 @@ class OpenAiTransportTest {
         }finally{server.stop(0);}
     }
     private static Set<String> toSet(Iterator<String> i){var set=new HashSet<String>();i.forEachRemaining(set::add);return set;}
+    @Test void oauthDescriptionsBecomeOnlyControlledHintsAndNeverLeakRawText() throws Exception {
+        var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);var description=new AtomicReference<String>("");
+        server.createContext("/token",e->{
+            e.getRequestBody().readAllBytes();var body=new HashMap<String,String>();body.put("error","invalid_grant");
+            if(!description.get().isEmpty())body.put("error_description",description.get());
+            byte[] data=ChatGptAccounts.JSON.writeValueAsBytes(body);e.getResponseHeaders().set("x-request-id","request-test");
+            e.sendResponseHeaders(400,data.length);e.getResponseBody().write(data);e.close();
+        });server.start();
+        try {
+            var cases=Map.of("",ChatGptException.DescriptionHint.NOT_PROVIDED,
+                    "PKCE code_verifier mismatch private-secret",ChatGptException.DescriptionHint.PKCE,
+                    "redirect_uri mismatch private-secret",ChatGptException.DescriptionHint.REDIRECT_URI,
+                    "Authorization code invalid or expired private-secret",ChatGptException.DescriptionHint.AUTHORIZATION_CODE,
+                    "client_id mismatch private-secret",ChatGptException.DescriptionHint.CLIENT_BINDING,
+                    "private-secret",ChatGptException.DescriptionHint.OTHER);
+            for(var entry:cases.entrySet()) {
+                description.set(entry.getKey());var failure=assertThrows(ChatGptException.class,()->transport(server).tokens(Map.of("code","secret")));
+                assertEquals("invalid_grant",failure.code);assertEquals(400,failure.status);assertEquals("request-test",failure.requestId);
+                assertEquals(entry.getValue(),failure.descriptionHint);assertFalse(failure.getMessage().contains("private-secret"));
+            }
+        }finally{server.stop(0);}
+    }
     @Test void partialTextAndUsageFailureNeverBecomeSuccessfulAnswers() throws Exception {
         for(String ending:List.of("", "data: {\"type\":\"response.incomplete\"}\n\n", "data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"subscription_sharing_usage_limit_exceeded\",\"message\":\"private upstream data\"}}}\n\n")) {
             var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
