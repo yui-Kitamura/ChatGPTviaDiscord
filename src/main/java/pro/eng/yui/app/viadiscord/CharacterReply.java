@@ -5,7 +5,7 @@ import java.io.IOException;
 import java.util.*;
 
 /** Validated generator output. The Bot, not the model, assigns persistent post numbers. */
-record CharacterReply(List<CharacterSpec> characters, List<Post> posts) {
+record CharacterReply(String summary, List<CharacterSpec> characters, List<Post> posts) {
     record Post(String character, String text, List<Long> references) {}
 
     static String instructions(ResponseContext context, long nextPost) throws IOException {
@@ -17,8 +17,9 @@ record CharacterReply(List<CharacterSpec> characters, List<Post> posts) {
         return shared + """
 
                 今回の出力は JSON オブジェクトだけにする。Markdown の囲みや前後の説明を付けない。
-                形式: {"characters":[{"name":"キャラ名","persona":"役割・性格・話し方"}],
+                形式: {"summary":"今回のユーザー発言の簡潔なサマリ","characters":[{"name":"キャラ名","persona":"役割・性格・話し方"}],
                 "posts":[{"character":"キャラ名","text":"本文","references":[]}]}
+                summary は今回のユーザー発言だけを簡潔に要約する（1〜500文字）。回答や推測を混ぜない。
                 posts は1〜16件、目安は8〜16件。characters は今回発言する新規キャラの定義で8件まで。
                 保存済みキャラは名前で再利用できる。定義を変更しない。新規と既存を合わせて発言者は8人まで。
                 保存済みキャラが64人なら新規を作らず既存から選ぶ。
@@ -33,6 +34,8 @@ record CharacterReply(List<CharacterSpec> characters, List<Post> posts) {
         JsonNode root = ChatGptAccounts.JSON.reader().with(com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_TRAILING_TOKENS).readTree(raw);
         if (!root.isObject() || !root.path("characters").isArray() || root.path("characters").size() > 8
                 || !root.path("posts").isArray() || root.path("posts").isEmpty() || root.path("posts").size() > 16) throw new IOException("Invalid character reply schema.");
+        if (!root.path("summary").isTextual() || root.path("summary").asText().isBlank()
+                || root.path("summary").asText().length() > 500) throw new IOException("Invalid summary.");
         var known = new LinkedHashMap<String,CharacterSpec>();
         for (var role : context.knownCharacters()) known.put(role.character().name(), role.character());
         var proposals = new LinkedHashMap<String,CharacterSpec>();
@@ -60,18 +63,7 @@ record CharacterReply(List<CharacterSpec> characters, List<Post> posts) {
             posts.add(new Post(name, text, List.copyOf(references)));
         }
         if (used.size() > 8) throw new IOException("Too many speakers.");
-        return new CharacterReply(List.copyOf(used.values()), List.copyOf(posts));
+        return new CharacterReply(root.path("summary").asText().strip(), List.copyOf(used.values()), List.copyOf(posts));
     }
 
-    String display(long firstPost) {
-        var text = new StringBuilder("AI による掛け合い\n");
-        for (int i = 0; i < posts.size(); i++) {
-            var post = posts.get(i);
-            text.append('\n').append(firstPost + i).append("：名無しの").append(post.character()).append('\n');
-            for (long reference : post.references()) text.append(">>").append(reference).append(' ');
-            if (!post.references().isEmpty()) text.append('\n');
-            text.append(post.text()).append('\n');
-        }
-        return text.toString();
-    }
 }

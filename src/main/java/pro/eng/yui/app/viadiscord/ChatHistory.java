@@ -10,12 +10,14 @@ final class ChatHistory {
         public List<Map<String,String>> turns=new ArrayList<>();
         public List<String> ids=new ArrayList<>();
         public long nextPost=1;
+        public Map<Long,String> postMessages=new LinkedHashMap<>();
         public History(){}
     }
     private final Path directory;
     ChatHistory(Path directory){this.directory=directory;}
     History load(String key) throws IOException {
         var file=path(key);var value=Files.exists(file)?ChatGptAccounts.JSON.readValue(Files.readString(file),History.class):new History();
+        if(value.postMessages==null)value.postMessages=new LinkedHashMap<>();
         if(value.turns==null||value.ids==null||value.turns.size()>40||value.nextPost<1||value.nextPost>9_000_000_000_000_000L)throw new IOException("Invalid recent history.");
         for(var turn:value.turns)if(!Set.of("user","assistant").contains(turn.get("role"))||turn.get("content")==null)throw new IOException("Invalid history item.");
         return value;

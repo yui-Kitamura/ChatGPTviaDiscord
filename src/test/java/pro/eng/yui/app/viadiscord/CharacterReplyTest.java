@@ -7,19 +7,19 @@ import org.junit.jupiter.api.Test;
 class CharacterReplyTest {
     private final ResponseContext context = new ResponseContext(ResponseMode.THREAD, List.of(), List.of());
     static final String REPLY = """
-            {"characters":[{"name":"案内人","persona":"落ち着いた説明役"}],
+            {"summary":"説明を求めている。","characters":[{"name":"案内人","persona":"落ち着いた説明役"}],
              "posts":[{"character":"案内人","text":"説明します。","references":[4]}]}
             """;
 
     @Test void validatesStructuredSpeakersAndUsesBotAssignedNumbering() throws Exception {
         var result = CharacterReply.parse(REPLY, context, 5);
         assertEquals(new CharacterSpec("案内人", "落ち着いた説明役"), result.characters().getFirst());
-        assertTrue(result.display(5).contains("5：名無しの案内人\n>>4"));
-        assertTrue(result.display(5).startsWith("AI による掛け合い"));
+        assertEquals("説明を求めている。",result.summary());
+        assertEquals(List.of(4L),result.posts().getFirst().references());
     }
 
     @Test void rejectsMalformedUnknownSpeakersAndFutureReferencesBeforeRoleCreation() {
-        for (String invalid : List.of("ordinary answer", REPLY + "{}", REPLY.replace("[4]", "[5]"),
+        for (String invalid : List.of("ordinary answer", REPLY + "{}", REPLY.replace("説明を求めている。", ""), REPLY.replace("summary", "missing"), REPLY.replace("[4]", "[5]"),
                 REPLY.replace("[4]", "[-1]"), REPLY.replace("[4]", "[4.1]"),
                 REPLY.replace("\"character\":\"案内人\"", "\"character\":\"unknown\""))) {
             assertThrows(Exception.class, () -> CharacterReply.parse(invalid, context, 5));
