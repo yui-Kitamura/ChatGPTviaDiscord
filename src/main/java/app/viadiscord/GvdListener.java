@@ -1,0 +1,89 @@
+package app.viadiscord;
+
+import java.io.IOException;
+import java.util.List;
+import net.dv8tion.jda.api.entities.Message;
+import net.dv8tion.jda.api.entities.MessageType;
+import net.dv8tion.jda.api.entities.channel.ChannelType;
+import net.dv8tion.jda.api.entities.emoji.Emoji;
+import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
+import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
+import net.dv8tion.jda.api.hooks.ListenerAdapter;
+import net.dv8tion.jda.api.interactions.commands.OptionMapping;
+import net.dv8tion.jda.api.requests.restaction.MessageCreateAction;
+
+final class GvdListener extends ListenerAdapter {
+    private final ChannelControls controls;
+
+    GvdListener(ChannelControls controls) {
+        this.controls = controls;
+    }
+
+    @Override
+    public void onMessageReceived(MessageReceivedEvent event) {
+        if (!event.isFromGuild() || !controls.acceptsGuild(event.getGuild().getId())) return;
+        Message message = event.getMessage();
+        if (message.isWebhookMessage() || event.getAuthor().isBot()
+                || (message.getType() != MessageType.DEFAULT && message.getType() != MessageType.INLINE_REPLY)) return;
+        String parent = event.getChannelType().isThread()
+                ? event.getChannel().asThreadChannel().getParentChannel().getId() : null;
+        if (!controls.shouldRespond(event.getGuild().getId(), event.getChannel().getId(), parent,
+                event.getAuthor().isBot(), message.isWebhookMessage(), message.getType())) return;
+        try {
+            message.addReaction(Emoji.fromUnicode("👀")).queue(ignored -> {}, failure -> logFailure("REACTION", failure));
+        } catch (RuntimeException failure) {
+            logFailure("REACTION", failure);
+        }
+        try {
+            quietReply(message).queue(ignored -> {}, failure -> logFailure("REPLY", failure));
+        } catch (RuntimeException failure) {
+            logFailure("REPLY", failure);
+        }
+    }
+
+    static MessageCreateAction quietReply(Message message) {
+        return message.reply("botが読みました")
+                .mentionRepliedUser(false)
+                .setAllowedMentions(List.of())
+                .setSuppressedNotifications(true)
+                .failOnInvalidReply(true);
+    }
+
+    @Override
+    public void onSlashCommandInteraction(SlashCommandInteractionEvent event) {
+        if (!"gvd".equals(event.getName()) || event.getUser().isBot()) return;
+        if (!"skipch".equals(event.getSubcommandName()) && !"readch".equals(event.getSubcommandName())) return;
+        if (!event.isFromGuild() || !controls.acceptsGuild(event.getGuild().getId())) {
+            event.reply("このサーバーでは利用できません。").setEphemeral(true).queue();
+            return;
+        }
+        String subcommand = event.getSubcommandName();
+
+        OptionMapping option = event.getOption("ch");
+        if (option == null) {
+            event.reply("対象チャンネルを指定してください。").setEphemeral(true).queue();
+            return;
+        }
+        var channel = option.getAsChannel();
+        if (!controls.acceptsGuild(channel.getGuild().getId()) || channel.getType() == ChannelType.CATEGORY) {
+            event.reply("対象サーバーのチャンネルを指定してください。カテゴリは対象外です。").setEphemeral(true).queue();
+            return;
+        }
+        event.deferReply(true).queue(hook -> {
+            String response;
+            try {
+                response = controls.update(event.getGuild().getId(), subcommand, channel.getId());
+            } catch (IOException failure) {
+                logFailure("SETTINGS_SAVE", failure);
+                response = "保存できなかったため、設定は変更していません。";
+            }
+            hook.editOriginal(response).setAllowedMentions(List.of()).queue(
+                    ignored -> {}, failure -> logFailure("COMMAND_REPLY", failure));
+        }, failure -> logFailure("COMMAND_ACK", failure));
+    }
+
+    private static void logFailure(String operation, Throwable failure) {
+        // Exception messages can contain external payloads. Never log message text or credentials.
+        System.err.printf("GVD_%s_FAILED error_type=%s%n", operation, failure.getClass().getSimpleName());
+    }
+}

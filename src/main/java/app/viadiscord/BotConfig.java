@@ -5,6 +5,7 @@ import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.InvalidPathException;
 import java.time.Duration;
 import java.util.Map;
 import java.util.Properties;
@@ -42,9 +43,14 @@ record BotConfig(String token, String guildId, Duration startupTimeout, Path sta
         if (timeout < 5 || timeout > 300) {
             throw new IllegalArgumentException("BOT_STARTUP_TIMEOUT_SECONDS must be an integer from 5 to 300.");
         }
-        String stateDirectory = value(environment, properties, "BOT_STATE_DIRECTORY", "bot.state.directory");
-        return new BotConfig(token, guild, Duration.ofSeconds(timeout),
-                Path.of(stateDirectory.isBlank() ? "state" : stateDirectory));
+        String state = value(environment, properties, "BOT_STATE_DIRECTORY", "bot.state.directory");
+        Path directory;
+        try {
+            directory = Path.of(state.isBlank() ? "state" : state).toAbsolutePath().normalize();
+        } catch (InvalidPathException e) {
+            throw new IllegalArgumentException("BOT_STATE_DIRECTORY must be a valid path.");
+        }
+        return new BotConfig(token, guild, Duration.ofSeconds(timeout), directory);
     }
 
     private static String value(Map<String, String> environment, Properties properties, String name, String key) {

@@ -16,7 +16,7 @@ mvn --batch-mode --no-transfer-progress verify
 
 `target/` に、依存ライブラリを含む `java -jar` で起動可能な JAR を 1 件生成する。sources、javadoc、tests、`original-*` の JAR は対象外。成果物は `chatgptviadiscord.jar` に統一する。
 
-現在のアプリケーションは Discord Gateway に接続し、指定サーバーへの参加を確認してオンラインを維持する。`/gvd mode` による場所ごとの応答設定保存を実装している。ChatGPT 応答、メッセージ取得、履歴保存はまだ接続していない。
+現在のアプリケーションは Discord Gateway に接続し、指定サーバーへの参加を確認してオンラインを維持する最小構成。通常投稿への 👀 と通知を抑えた定型返信、チャンネル単位の応答停止・再開と `/gvd mode` の応答設定保存に対応する。ChatGPT 応答と履歴保存はまだ実装していない。
 
 ## CI と VPS デプロイ
 
@@ -68,12 +68,13 @@ RAM 2GB・ストレージ 100GB の VPS を初期想定とする。ビルドは 
 
 ## Bot の設定と起動
 
-Discord Developer Portal で作成した Bot を、対象サーバーへ招待する。今回の接続確認では管理者権限や Message Content Intent などの privileged intent は不要。Bot はメッセージを送信・取得しない。
+Discord Developer Portal で作成した Bot を、対象サーバーへ招待する。対象チャンネルで「チャンネルを見る」「メッセージ履歴を読む」「リアクションの追加」「メッセージを送信」「スレッドでメッセージを送信」を許可する。管理者権限は不要。現段階は本文を参照せず投稿イベントに応答するため、Message Content Intent は不要。
 
 | 環境変数 | properties のキー | 内容 |
 | --- | --- | --- |
 | DISCORD_BOT_TOKEN | discord.bot.token | 必須。Bot の生トークン。Bot という接頭辞は付けない。 |
 | DISCORD_GUILD_ID | discord.guild.id | 必須。参加先サーバーの ID。 |
+| BOT_STATE_DIRECTORY | bot.state.directory | 設定保存ディレクトリ。既定は作業ディレクトリ配下の state。 |
 | BOT_STARTUP_TIMEOUT_SECONDS | bot.startup.timeout.seconds | READY を待つ秒数。既定 60、指定範囲 5〜300。 |
 | BOT_STATE_DIRECTORY | bot.state.directory | モード・動的キャラの保存先。既定 state（作業ディレクトリ相対）。release の外に置く。 |
 
@@ -109,7 +110,18 @@ GitHub Secrets は保存後の値を読み出せない。オンライン確認�
 
 VPS の既存 EnvironmentFile から Bot トークンを読み、Discord REST API のグローバルコマンド作成・更新エンドポイントに gvd だけを upsert する。他のコマンドをまとめて上書きしない。トークンは GitHub runner や成果物へ取り出さない。
 
-定義登録と Bot の反映は別。`register_commands_only` は Bot を再起動しないため、実行には今回の JAR の反映も必要。mode のハンドラーだけを実装しており、skipch/readch のハンドラー、通常投稿への 👀 と返信、/gvd auth は後続の作業。
+コマンド定義の登録とハンドラーのデプロイは別操作。定義だけを登録しても、実行にはハンドラーを含む JAR が必要。通常起動ではコマンドを再登録しない。/gvd auth は別の作業として扱う。
+
+## 投稿への応答とチャンネル設定
+
+指定サーバーの通常のユーザー投稿（返信を含む）に 👀 を付け、元投稿へのリプライで `botが読みました` と返す。返信先のユーザーをメンションせず、通知抑制フラグを設定する。Discord の未読表示までは抑制しない。Bot（自身を含む）・Webhook・システム投稿・DM・対象外サーバーには応答しない。本文の取得・保存や AI 呼び出しは行わない。
+
+- `/gvd skipch ch:チャンネル`：👀 と返信を両方停止する。
+- `/gvd readch ch:チャンネル`：そのチャンネルの停止設定を解除する。
+- コマンドの結果は実行者だけに表示する。カテゴリは指定できない。
+- 親チャンネルの停止設定は配下のスレッドにも適用する。親が停止中なら、スレッド側の readch だけでは再開せず、親の readch が必要。
+
+設定は `BOT_STATE_DIRECTORY/channel-response.properties` に保存する。既定の systemd unit では `/var/lib/chatgptviadiscord/state/channel-response.properties` になり、再起動・リリース切替後も残る。保存に成功してから応答方針を変更するため、保存失敗時は直前の設定を維持する。設定ファイルが壊れている場合は起動を中止し、全チャンネル応答へ戻さない。ファイルが存在しない初回は、閲覧可能な対象サーバーの全チャンネルに応答する。
 
 ## 応答モードと動的キャラ
 
