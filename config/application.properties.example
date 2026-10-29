@@ -16,3 +16,7 @@ codex.usage.enabled=true
 codex.usage.executable=/usr/local/bin/codex
 codex.usage.home=/var/lib/chatgptviadiscord/codex-usage
 codex.usage.timeout.seconds=20
+
+# Automatic /gvd limit results: 1 hour or 10 completed AI replies; empty disables.
+# Set the numeric ID of the target guild text channel #limit.
+discord.limit.channel.id=
