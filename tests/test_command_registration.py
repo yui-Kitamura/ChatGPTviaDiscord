@@ -31,7 +31,10 @@ class CommandRegistrationTest(unittest.TestCase):
         payload = json.loads(requests[1].data)
         self.assertEqual([0], payload['contexts'])
         self.assertEqual([0], payload['integration_types'])
-        self.assertEqual(['skipch', 'readch', 'mode', 'accept', 'reject', 'auth', 'model'], [item['name'] for item in payload['options']])
+        self.assertEqual(['skipch', 'readch', 'mode', 'accept', 'reject', 'auth', 'model', 'limit'], [item['name'] for item in payload['options']])
+        limit = next(item for item in payload['options'] if item['name'] == 'limit')
+        self.assertEqual(1, limit['type'])
+        self.assertFalse(limit.get('options'))
         for subcommand in payload['options'][:2]:
             self.assertEqual(1, subcommand['type'])
             self.assertEqual('ch', subcommand['options'][0]['name'])
@@ -67,6 +70,17 @@ class CommandRegistrationTest(unittest.TestCase):
         actual = module.command_definition()['options']
         actual[2]['options'][0]['name_localizations'] = None
         self.assertTrue(module.matches_definition(actual, module.command_definition()['options']))
+
+    def test_missing_limit_is_not_reported_as_success(self):
+        def opener(request, timeout):
+            if request.get_method() == 'GET':
+                return io.StringIO(json.dumps({'id': '123456789012345678', 'bot': True}))
+            result = module.command_definition()
+            result['id'] = '234567890123456789'
+            result['options'] = [option for option in result['options'] if option['name'] != 'limit']
+            return io.StringIO(json.dumps(result))
+        with self.assertRaises(ValueError):
+            module.register('synthetic-token', opener)
 
     def test_missing_token_does_not_make_a_network_request(self):
         def forbidden(*args, **kwargs):

@@ -4,7 +4,7 @@
 
 構想と受け入れ条件は [MVP 要件定義書](docs/01_構想.md) を参照。
 
-Discord サーバー内で会話する AI 向けの背景説明は [会話 AI 用 README](docs/discord-ai/README.md)、振る舞いの指針は [会話 AI 用 AGENTS.md](docs/discord-ai/AGENTS.md) を参照。開発用の文書とは分けて管理する。現時点では文書の初稿であり、Bot による読み込みは未実装。
+Discord サーバー内で会話する AI 向けの背景説明は [会話 AI 用 README](docs/discord-ai/README.md)、振る舞いの指針は [会話 AI 用 AGENTS.md](docs/discord-ai/AGENTS.md) を参照。開発用の文書とは分けて管理する。ChatGPT接続を有効にすると、同梱した原文を応答指示として読み込む。
 
 ## Java とビルドの前提
 
@@ -62,7 +62,7 @@ deploy が `/opt/chatgptviadiscord/releases/` を準備し、専用ユーザー�
 
 転送先は `/opt/chatgptviadiscord/releases/<コミットSHA>-<run ID>-<実行回数>/`。チェックサム確認後に `current` を切り替え、サービスを再起動する。その起動固有の systemd InvocationID に属する journal から `BOT_READY` を最大約 325 秒待ち、Discord READY と対象サーバーへの参加確認が済んだことを判定する。
 
-プロセス停止・再起動ループ・READY 未確認の場合は、直前の JAR の release への復旧を試み、ジョブを失敗させる。初回で戻り先がない場合はサービスを停止する。これは起動時の確認であり、Discord クライアント上の表示や、未実装の ChatGPT 応答を検証するものではない。旧 release の世代削除と、会話データのバックアップは別途運用を決める。
+プロセス停止・再起動ループ・READY 未確認の場合は、直前の JAR の release への復旧を試み、ジョブを失敗させる。初回で戻り先がない場合はサービスを停止する。これは起動時の確認であり、Discord クライアント上の表示や、ChatGPTでの認証・応答成功を検証するものではない。旧 release の世代削除と、会話データのバックアップは別途運用を決める。
 
 RAM 2GB・ストレージ 100GB の VPS を初期想定とする。ビルドは GitHub runner で行い、VPS では Bot と保存・検索処理を動かす。JVM のヒープ上限と実メモリ使用量はアプリ実装後に測定する。
 
@@ -80,11 +80,6 @@ Discord Developer Portal で作成した Bot を、対象サーバーへ招待�
 | DISCORD_AI_ROLE_ID | discord.ai.role.id | 任意の初期許可ロール。通常は /gvd accept で設定する。 |
 | BOT_STATE_DIRECTORY | bot.state.directory | 設定保存ディレクトリ。既定は作業ディレクトリ配下の state。 |
 | BOT_STARTUP_TIMEOUT_SECONDS | bot.startup.timeout.seconds | READY を待つ秒数。既定 60、指定範囲 5〜300。 |
-| CHATGPT_ENABLED | chatgpt.enabled | 既定false。trueで認証とAI返信を有効にする。 |
-| CHATGPT_CALLBACK_PORT | chatgpt.callback.port | 127.0.0.1上の認証待受。既定1455。 |
-| CHATGPT_REQUEST_TIMEOUT_SECONDS | chatgpt.request.timeout.seconds | 応答期限。既定180秒、10〜300秒。 |
-| DISCORD_AI_ROLE_ID | discord.ai.role.id | 任意の初期許可ロール。通常は /gvd accept で設定する。 |
-| BOT_STATE_DIRECTORY | bot.state.directory | モード・動的キャラの保存先。既定 state（作業ディレクトリ相対）。release の外に置く。 |
 
 環境変数を優先する。ローカルでファイルを使う場合は、config/application.properties.example を config/application.properties にコピーして、本人だけが読める設定にする。このファイルは Git 対象外。実際のトークンはチャット・コマンド引数・シェル履歴へ貼らず、エディタで入力する。
 
@@ -110,7 +105,7 @@ GitHub Secrets は保存後の値を読み出せない。オンライン確認�
 
 手動実行で register_commands_only を true にすると、指定 ref の /gvd 定義だけを登録する。通常の main 限定デプロイとは別の経路であり、current の切替・unit の更新・Bot の再起動は行わない。既に準備済みの VPS と Python 3 が必要。
 
-登録内容は次の 7 つ。グローバル登録し、使用コンテキストはギルドに限定する。
+登録内容は次の 8 つ。グローバル登録し、使用コンテキストはギルドに限定する。
 
 - /gvd skipch ch:チャンネル
 - /gvd readch ch:チャンネル
@@ -119,10 +114,19 @@ GitHub Secrets は保存後の値を読み出せない。オンライン確認�
 - /gvd reject role:@ロール
 - /gvd auth action:login/status/use/logout account:保存名（省略時login/default）
 - /gvd model name:モデルslug（省略時一覧）
+- /gvd limit
 
 VPS の既存 EnvironmentFile から Bot トークンを読み、Discord REST API のグローバルコマンド作成・更新エンドポイントに gvd だけを upsert する。他のコマンドをまとめて上書きしない。トークンは GitHub runner や成果物へ取り出さない。
 
 コマンド定義の登録とハンドラーのデプロイは別操作。定義だけを登録しても、実行にはハンドラーを含む JAR が必要。通常起動ではコマンドを再登録しない。認証・許可ロール・モデルの操作は [日本語セットアップ手順](docs/02_ChatGPT接続.md) を参照。
+
+## AI の利用枠・残量確認
+
+`/gvd limit` は設定対象サーバーの実行チャンネルに、全員が見える通常メッセージとして結果を返信する。利用枠の数値取得は未実装のため、残量は「取得できません」、回復時刻は「不明」と表示し、[ChatGPT の設定 → Usage](https://chatgpt.com/settings/usage) を案内する。残量の数値取得は未実装。このコマンドから AI リクエストを送信せず、利用枠の消費や API キー課金への切替を行わない。
+
+ChatGPT プラン利用を第一候補とする既存要件に合わせた案内であり、API キー課金のクレジット残高やレート制限を表示するものではない。[公式のエラー処理](https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery) に従い、利用枠不足からアカウント全体の残量や回復時刻を推測しない。AI 接続の実装時に取得可能な情報を確認して拡張する。
+
+定義だけの先行登録では稼働中の Bot の処理は変わらない。`limit` の実行には、この変更を含む JAR のデプロイと再起動も必要。Discord 上での登録・表示・公開返信は別途実機確認する。
 
 ## 投稿への応答とチャンネル設定
 
