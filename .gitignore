@@ -10,3 +10,4 @@
 /dependency-reduced-pom.xml
 *.env
 __pycache__/
+/state/
