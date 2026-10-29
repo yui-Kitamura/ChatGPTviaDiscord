@@ -66,7 +66,8 @@ class AiConversationTest {
                 }
                 verify(h.message).reply(startsWith("発言サマリ：説明を求めている。"));
                 verify(h.messageEvent.getChannel()).sendMessage(contains(n+"：案内人 <@&456789012345678901>"));
-                if(n==2)verify(postAction).setMessageReference("987654321098765431");
+                verify(postAction,never()).setMessageReference(anyString());
+                if(n==2)verify(h.messageEvent.getChannel()).sendMessage(contains("[>>1](https://discord.com/channels/"));
                 assertEquals(1,settings.characters().size());
             }
             assertEquals(1,created.get());assertEquals(2,calls.get());

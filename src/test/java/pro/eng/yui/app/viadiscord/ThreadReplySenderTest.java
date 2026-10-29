@@ -45,17 +45,18 @@ class ThreadReplySenderTest {
         order.verify(channel).sendMessage("1：案内人 <@&456789012345678901>\n確認します。");
         order.verify(post).complete();
         order.verify(channel).sendMessage(contains("2：案内人 <@&456789012345678901>\n[>>1](https://discord.com/channels/"));
-        order.verify(post).setMessageReference("345678901234567890");order.verify(post).complete();
+        order.verify(post).complete();
+        verify(post,never()).setMessageReference(anyString());
         verify(summary).mentionRepliedUser(false);verify(summary).setSuppressedNotifications(true);
         verify(post,never()).setSuppressedNotifications(anyBoolean());
         verify(post,times(2)).setAllowedMentions(List.of());
         assertEquals(saved.postMessages,history.load("123").postMessages);
     }
 
-    @Test void multipleReferencesUseFirstAvailableTargetAndKeepOtherLinks() throws Exception {
+    @Test void multipleReferencesKeepAllLinksWithoutDiscordReply() throws Exception {
         var saved=new ChatHistory.History();saved.postMessages.put(3L,"333456789012345678");saved.postMessages.put(4L,"444456789012345678");
         ThreadReplySender.send(source,reply("説明。",List.of(3L,4L)),5,roles,saved,()->{});
-        verify(post).setMessageReference("333456789012345678");
+        verify(post,never()).setMessageReference(anyString());
         verify(channel).sendMessage(argThat((String s)->s.contains("[>>3]")&&s.contains("[>>4]")&&s.contains("444456789012345678")));
     }
 

@@ -39,8 +39,6 @@ final class ThreadReplySender {
             // Keep one Discord message per number even for long posts.
             boolean attachment=text.length()>2000;
             MessageCreateAction action=source.getChannel().sendMessage(attachment?header+"本文を添付しました。":text.toString());
-            String target=post.references().stream().map(saved.postMessages::get).filter(java.util.Objects::nonNull).findFirst().orElse(null);
-            if(target!=null)action.setMessageReference(target).mentionRepliedUser(false).failOnInvalidReply(false);
             action.setAllowedMentions(List.of());
             if(attachment)action.addFiles(FileUpload.fromData(post.text().getBytes(StandardCharsets.UTF_8),"post-"+number+".txt"));
             Message sent=action.complete();
