@@ -1,0 +1,11 @@
+/target/
+/dist/
+/logs/
+/run/
+/.env
+/.env.*
+!/.env.example
+/config/*.properties
+!/config/*.properties.example
+/dependency-reduced-pom.xml
+*.env

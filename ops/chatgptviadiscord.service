@@ -1,0 +1,25 @@
+[Unit]
+Description=ChatGPTviaDiscord Bot
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=chatgptviadiscord
+Group=chatgptviadiscord
+StateDirectory=chatgptviadiscord
+StateDirectoryMode=0700
+WorkingDirectory=/var/lib/chatgptviadiscord
+EnvironmentFile=/etc/chatgptviadiscord.env
+ExecStart=/usr/bin/java -Xms32m -Xmx256m -jar /opt/chatgptviadiscord/current/chatgptviadiscord.jar
+Restart=on-failure
+RestartSec=15
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

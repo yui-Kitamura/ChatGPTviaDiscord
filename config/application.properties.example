@@ -1,0 +1,5 @@
+# Copy to config/application.properties and restrict access to the local user.
+# Never commit the real token. Environment variables override these properties.
+discord.bot.token=
+discord.guild.id=
+bot.startup.timeout.seconds=60

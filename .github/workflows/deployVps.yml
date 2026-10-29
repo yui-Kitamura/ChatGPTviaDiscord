@@ -58,8 +58,9 @@ jobs:
           }
           mkdir -p dist
           cp -- "${jars[0]}" dist/chatgptviadiscord.jar
+          cp ops/chatgptviadiscord.service dist/chatgptviadiscord.service
           printf '%s\n' "$GITHUB_SHA" > dist/REVISION
-          (cd dist && sha256sum chatgptviadiscord.jar REVISION > SHA256SUMS)
+          (cd dist && sha256sum chatgptviadiscord.jar chatgptviadiscord.service REVISION > SHA256SUMS)
 
       - name: Upload deployment artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -110,6 +111,23 @@ jobs:
           (cd dist && sha256sum --check SHA256SUMS)
           test "$(cat dist/REVISION)" = "$GITHUB_SHA"
 
+      - name: Prepare the VPS release directory
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          password: ${{ secrets.VPS_PASSWORD }}
+          port: ${{ vars.VPS_PORT || '22' }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          script: |
+            set -eu
+            # The existing runtime configuration is never printed or overwritten.
+            sudo -n test -s /etc/chatgptviadiscord.env
+            sudo -n chown root:root /etc/chatgptviadiscord.env
+            sudo -n chmod 600 /etc/chatgptviadiscord.env
+            sudo -n install -d -o "$(id -un)" -g "$(id -gn)" -m 755 \
+              /opt/chatgptviadiscord /opt/chatgptviadiscord/releases
+
       - name: Upload the release to VPS
         uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345 # v1.0.0
         with:
@@ -118,7 +136,7 @@ jobs:
           password: ${{ secrets.VPS_PASSWORD }}
           port: ${{ vars.VPS_PORT || '22' }}
           fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
-          source: dist/chatgptviadiscord.jar,dist/REVISION,dist/SHA256SUMS
+          source: dist/chatgptviadiscord.jar,dist/chatgptviadiscord.service,dist/REVISION,dist/SHA256SUMS
           target: /opt/chatgptviadiscord/releases/${{ env.RELEASE_ID }}
           strip_components: 1
 
@@ -131,7 +149,7 @@ jobs:
           port: ${{ vars.VPS_PORT || '22' }}
           fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
           envs: RELEASE_ID
-          command_timeout: 2m
+          command_timeout: 6m
           script: |
             set -eu
             root=/opt/chatgptviadiscord
@@ -139,6 +157,14 @@ jobs:
             cd "$release"
             sha256sum --check SHA256SUMS
             test "$(cat REVISION)" = "${RELEASE_ID%%-*}"
+            if ! getent passwd chatgptviadiscord >/dev/null; then
+              sudo -n useradd --system --user-group --home-dir /var/lib/chatgptviadiscord \
+                --shell /usr/sbin/nologin chatgptviadiscord
+            fi
+            sudo -n install -o root -g root -m 644 chatgptviadiscord.service \
+              /etc/systemd/system/chatgptviadiscord.service
+            sudo -n systemctl daemon-reload
+            sudo -n systemctl enable chatgptviadiscord.service
             previous=$(readlink -f "$root/current" || true)
             rollback() {
               if [ -n "$previous" ] && [ -d "$previous" ]; then
@@ -156,8 +182,23 @@ jobs:
               rollback
               exit 1
             fi
-            sleep 5
-            if ! systemctl is-active --quiet chatgptviadiscord.service; then
+            invocation=$(systemctl show --property=InvocationID --value chatgptviadiscord.service || true)
+            if [ -z "$invocation" ]; then
               rollback
               exit 1
             fi
+            for attempt in $(seq 1 65); do
+              current=$(systemctl show --property=InvocationID --value chatgptviadiscord.service || true)
+              if [ "$current" != "$invocation" ] || ! systemctl is-active --quiet chatgptviadiscord.service; then
+                break
+              fi
+              if sudo -n journalctl --quiet -b "_SYSTEMD_INVOCATION_ID=$invocation" --no-pager -o cat \
+                  | grep -q '^BOT_READY '; then
+                echo 'Discord READY and configured guild membership confirmed.'
+                exit 0
+              fi
+              sleep 5
+            done
+            echo 'Discord readiness was not confirmed; reverting the release.' >&2
+            rollback
+            exit 1
