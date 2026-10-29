@@ -97,6 +97,8 @@ class ChatGptAuthTest {
             var auth=authorize(session.login(USER,"default",()->true,t->{}),fake);
             assertEquals(200,callback(auth,query(auth).get("state"),CLIENT).statusCode());
             assertEquals("permission_missing",assertThrows(ChatGptException.class,()->session.ready(USER)).code);
+            var retry=query(authorize(session.login(USER,"default",()->true,t->{}),fake));
+            assertEquals("consent",retry.get("prompt"));
         }
     }
     @Test void rotatingRefreshIsSerializedAndLogoutRetainsRegistration() throws Exception {
