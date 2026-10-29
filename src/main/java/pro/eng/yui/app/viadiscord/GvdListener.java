@@ -77,16 +77,36 @@ final class GvdListener extends ListenerAdapter {
             return;
         }
         event.deferReply(true).queue(hook -> {
-            String response;
             try {
-                response = controls.update(event.getGuild().getId(), subcommand, channel.getId());
+                controls.update(event.getGuild().getId(), subcommand, channel.getId());
             } catch (IOException failure) {
                 logFailure("SETTINGS_SAVE", failure);
-                response = "保存できなかったため、設定は変更していません。";
+                hook.editOriginal("保存できなかったため、設定は変更していません。")
+                        .queue(ignored -> {}, error -> logFailure("COMMAND_REPLY", error));
+                return;
             }
-            hook.editOriginal(response).setAllowedMentions(List.of()).queue(
-                    ignored -> {}, failure -> logFailure("COMMAND_REPLY", failure));
+            var logChannel = event.getGuild().getSystemChannel();
+            if (logChannel == null) {
+                hook.editOriginal("設定を変更しましたが、サーバーのデフォルトログチャンネルが未設定のため結果を投稿できませんでした。")
+                        .queue(ignored -> {}, failure -> logFailure("COMMAND_REPLY", failure));
+                return;
+            }
+            String response = channel.getAsMention() + ("readch".equals(subcommand) ? " はROMります" : " はROMりません");
+            try {
+                logChannel.sendMessage(response).setAllowedMentions(List.of()).queue(
+                        ignored -> hook.editOriginal("デフォルトログチャンネルに結果を投稿しました。")
+                                .queue(done -> {}, failure -> logFailure("COMMAND_REPLY", failure)),
+                        failure -> reportLogFailure(hook, failure));
+            } catch (RuntimeException failure) {
+                reportLogFailure(hook, failure);
+            }
         }, failure -> logFailure("COMMAND_ACK", failure));
+    }
+
+    private static void reportLogFailure(net.dv8tion.jda.api.interactions.InteractionHook hook, Throwable failure) {
+        logFailure("COMMAND_LOG", failure);
+        hook.editOriginal("設定を変更しましたが、デフォルトログチャンネルへの結果の投稿に失敗しました。")
+                .queue(ignored -> {}, error -> logFailure("COMMAND_REPLY", error));
     }
 
     private static void logFailure(String operation, Throwable failure) {
