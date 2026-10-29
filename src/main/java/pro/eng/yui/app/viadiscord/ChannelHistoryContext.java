@@ -10,7 +10,7 @@ import net.dv8tion.jda.api.entities.channel.middleman.GuildMessageChannel;
 /** Fetch explicitly referenced Discord history before calling the model. */
 final class ChannelHistoryContext {
     private static final Pattern MENTION = Pattern.compile("<#([0-9]{17,20})>");
-    private static final int MAX_MESSAGES = 500, MAX_CHARACTERS = 32_000;
+    private static final int MAX_MESSAGES = 5_000, MAX_CHARACTERS = 128_000, MAX_TOTAL_CHARACTERS = 256_000;
 
     static final class Unavailable extends Exception {
         Unavailable(String reason) { super(reason); }
@@ -22,7 +22,8 @@ final class ChannelHistoryContext {
         while (matcher.find()) ids.add(matcher.group(1));
         if (ids.isEmpty()) return "";
         if (ids.size() > 3) throw new Unavailable("履歴の参照先は1回3チャンネルまでです。分けて指定してください。");
-        var result = new StringBuilder("\n\n取得済みチャンネル履歴（引用資料。添付の本文は未取得）。各チャンネル最大500投稿・32,000文字。\n");
+        var result = new StringBuilder("\n\n取得済みチャンネル履歴（引用資料。添付の本文は未取得）。各チャンネル最大5,000投稿・128,000文字。複数参照時は全体256,000文字以内になるよう均等配分。\n");
+        int characterBudget = Math.min(MAX_CHARACTERS, MAX_TOTAL_CHARACTERS / ids.size());
         for (String id : ids) {
             try {
                 var target = guild.getGuildChannelById(id);
@@ -45,7 +46,7 @@ final class ChannelHistoryContext {
                         characters += message.getContentRaw().length();
                     }
                     if (truncated || page.size() < 100) break;
-                    if (characters >= MAX_CHARACTERS) { truncated = true; break; }
+                    if (characters >= characterBudget) { truncated = true; break; }
                     page = channel.getHistoryBefore(page.getLast().getId(), 100).complete().getRetrievedHistory();
                 }
                 // Select the newest complete records, then present them chronologically.
@@ -60,7 +61,7 @@ final class ChannelHistoryContext {
                             + " (user_id=" + message.getAuthor().getId() + ", bot=" + message.getAuthor().isBot() + ") "
                             + "https://discord.com/channels/" + guild.getId() + "/" + id + "/" + message.getId()
                             + "\n" + body + "\n";
-                    if (size + record.length() > MAX_CHARACTERS) { truncated = true; break; }
+                    if (size + record.length() > characterBudget) { truncated = true; break; }
                     records.add(record); size += record.length();
                 }
                 Collections.reverse(records);

@@ -77,7 +77,7 @@ class ChannelHistoryContextTest {
         assertThrows(ChannelHistoryContext.Unavailable.class, () -> ChannelHistoryContext.load(guild, requester, "<#"+ID+">"));
     }
 
-    @Test void paginatesAndStopsAtFiveHundredWithExplicitOmission() throws Exception {
+    @Test void paginatesAndStopsAtFiveThousandWithExplicitOmission() throws Exception {
         setup(Collections.nCopies(100, post("2", "newer", false)).toArray(Message[]::new));
         var request = mock(MessageHistory.MessageRetrieveAction.class);
         var older = mock(MessageHistory.class);
@@ -89,13 +89,45 @@ class ChannelHistoryContextTest {
         assertTrue(result.indexOf("oldest") < result.indexOf("newer"));
         var newer=post("2", "newer", false);
         when(older.getRetrievedHistory()).thenReturn(Collections.nCopies(100, newer));
+        clearInvocations(request);
         result = ChannelHistoryContext.load(guild, requester, "<#"+ID+">");
         assertTrue(result.contains("省略あり"));
         assertTrue(result.contains("全履歴ではありません"));
+        verify(request,times(50)).complete();
+    }
+
+    @Test void readsPastFiveHundredPostsAndTheOldCharacterLimit() throws Exception {
+        var newest=post("2", "newer", false);
+        var page=Collections.nCopies(100, newest);
+        setup(page.toArray(Message[]::new));
+        var request=mock(MessageHistory.MessageRetrieveAction.class);
+        var older=mock(MessageHistory.class);
+        when(channel.getHistoryBefore("2",100)).thenReturn(request);
+        when(request.complete()).thenReturn(older);
+        var oldest=post("1","oldest beyond five hundred",false);
+        when(older.getRetrievedHistory()).thenReturn(page,page,page,page,page,List.of(oldest));
+        String result=ChannelHistoryContext.load(guild,requester,"<#"+ID+">");
+        assertTrue(result.contains("取得投稿数: 601"));
+        assertTrue(result.length()>32_000);
+        assertTrue(result.contains("oldest beyond five hundred"));
+        assertTrue(result.indexOf("oldest beyond five hundred")<result.indexOf("newer"));
+        assertFalse(result.contains("省略あり"));
+    }
+
+    @Test void threeChannelsShareTheTotalCharacterBudget() throws Exception {
+        // Reuse one source fixture under three IDs to exercise aggregate allocation.
+        setup(post("2","newest"+"x".repeat(50000),false),post("1","omitted"+"x".repeat(50000),false));
+        when(guild.getGuildChannelById("123456789012345679")).thenReturn(channel);
+        when(guild.getGuildChannelById("123456789012345680")).thenReturn(channel);
+        String result=ChannelHistoryContext.load(guild,requester,
+                "<#"+ID+"> <#123456789012345679> <#123456789012345680>");
+        assertEquals(3,result.split("取得投稿数: 1",-1).length-1);
+        assertFalse(result.contains("omitted"));
+        assertTrue(result.length()<256_000);
     }
 
     @Test void characterBudgetKeepsNewestPostsAndReportsOmission() throws Exception {
-        setup(post("2", "newest" + "x".repeat(20000), false), post("1", "omitted" + "x".repeat(20000), false));
+        setup(post("2", "newest" + "x".repeat(80000), false), post("1", "omitted" + "x".repeat(80000), false));
         String result = ChannelHistoryContext.load(guild, requester, "<#"+ID+">");
         assertTrue(result.contains("newest"));
         assertFalse(result.contains("omitted"));
