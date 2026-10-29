@@ -1,0 +1,163 @@
+name: Build and deploy to VPS
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Java without application secrets
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Require the Maven project
+        run: |
+          test -f pom.xml || {
+            echo '::error::Add the Java 21 Maven application at the repository root (pom.xml).'
+            exit 1
+          }
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+          cache-dependency-path: pom.xml
+
+      - name: Test and package
+        run: mvn --batch-mode --no-transfer-progress verify
+
+      - name: Stage one executable JAR
+        run: |
+          set -euo pipefail
+          mapfile -d '' jars < <(find target -maxdepth 1 -type f -name '*.jar' \
+            ! -name 'original-*' ! -name '*-sources.jar' ! -name '*-javadoc.jar' \
+            ! -name '*-tests.jar' -print0)
+          if [ "${#jars[@]}" -ne 1 ]; then
+            echo '::error::Expected exactly one executable JAR in target/.'
+            exit 1
+          fi
+          unzip -p "${jars[0]}" META-INF/MANIFEST.MF | grep -q '^Main-Class:' || {
+            echo '::error::The JAR must have Main-Class and run with java -jar.'
+            exit 1
+          }
+          mkdir -p dist
+          cp -- "${jars[0]}" dist/chatgptviadiscord.jar
+          printf '%s\n' "$GITHUB_SHA" > dist/REVISION
+          (cd dist && sha256sum chatgptviadiscord.jar REVISION > SHA256SUMS)
+
+      - name: Upload deployment artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: chatgptviadiscord-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  deploy:
+    name: Deploy the built artifact to VPS
+    needs: build
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: chatgptviadiscord-vps
+      cancel-in-progress: false
+    env:
+      RELEASE_ID: ${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Check deployment configuration
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USERNAME: ${{ secrets.VPS_USERNAME }}
+          VPS_PASSWORD: ${{ secrets.VPS_PASSWORD }}
+          VPS_HOST_FINGERPRINT: ${{ secrets.VPS_HOST_FINGERPRINT }}
+        run: |
+          set -euo pipefail
+          for setting in VPS_HOST VPS_USERNAME VPS_PASSWORD VPS_HOST_FINGERPRINT; do
+            if [ -z "${!setting}" ]; then
+              echo "::error::Missing deployment secret: $setting"
+              exit 1
+            fi
+          done
+
+      - name: Download this run's build artifact
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: chatgptviadiscord-${{ github.sha }}
+          path: dist
+
+      - name: Verify the artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum --check SHA256SUMS)
+          test "$(cat dist/REVISION)" = "$GITHUB_SHA"
+
+      - name: Upload the release to VPS
+        uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345 # v1.0.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          password: ${{ secrets.VPS_PASSWORD }}
+          port: ${{ vars.VPS_PORT || '22' }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          source: dist/chatgptviadiscord.jar,dist/REVISION,dist/SHA256SUMS
+          target: /opt/chatgptviadiscord/releases/${{ env.RELEASE_ID }}
+          strip_components: 1
+
+      - name: Activate the release and restart the service
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USERNAME }}
+          password: ${{ secrets.VPS_PASSWORD }}
+          port: ${{ vars.VPS_PORT || '22' }}
+          fingerprint: ${{ secrets.VPS_HOST_FINGERPRINT }}
+          envs: RELEASE_ID
+          command_timeout: 2m
+          script: |
+            set -eu
+            root=/opt/chatgptviadiscord
+            release="$root/releases/$RELEASE_ID"
+            cd "$release"
+            sha256sum --check SHA256SUMS
+            test "$(cat REVISION)" = "${RELEASE_ID%%-*}"
+            previous=$(readlink -f "$root/current" || true)
+            rollback() {
+              if [ -n "$previous" ] && [ -d "$previous" ]; then
+                ln -sfn "$previous" "$root/current.next"
+                mv -Tf "$root/current.next" "$root/current"
+                sudo -n systemctl restart chatgptviadiscord.service || true
+              else
+                sudo -n systemctl stop chatgptviadiscord.service || true
+                rm -f "$root/current"
+              fi
+            }
+            ln -sfn "$release" "$root/current.next"
+            mv -Tf "$root/current.next" "$root/current"
+            if ! sudo -n systemctl restart chatgptviadiscord.service; then
+              rollback
+              exit 1
+            fi
+            sleep 5
+            if ! systemctl is-active --quiet chatgptviadiscord.service; then
+              rollback
+              exit 1
+            fi
