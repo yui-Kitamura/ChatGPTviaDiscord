@@ -35,11 +35,11 @@ class AiConversationTest {
         };
         try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)){
             account(accounts);var access=new AiAccess(directory,ROLE);var history=new ChatHistory(directory.resolve("history"));
-            var first=event(USER,true,"1","first");var done=new CountDownLatch(1);doAnswer(i->{done.countDown();return first.reply;}).when(first.message).reply("answer");
+            var first=event(USER,true,"1","first");var done=new CountDownLatch(1);doAnswer(i->{done.countDown();return null;}).when(first.reply).queue(any(),any());
             try(var ai=new AiConversation(access,first.controls,session,transport,new ResponseSettings(directory.resolve("response.properties")),history,"guide")){
                 new GvdListener(first.controls,ai).onMessageReceived(first.messageEvent);assertTrue(done.await(5,TimeUnit.SECONDS));
             }
-            var second=event("234567890123456789",true,"2","second");var done2=new CountDownLatch(1);doAnswer(i->{done2.countDown();return second.reply;}).when(second.message).reply("answer");
+            var second=event("234567890123456789",true,"2","second");var done2=new CountDownLatch(1);doAnswer(i->{done2.countDown();return null;}).when(second.reply).queue(any(),any());
             try(var ai=new AiConversation(access,second.controls,session,transport,new ResponseSettings(directory.resolve("response.properties")),new ChatHistory(directory.resolve("history")),"guide")){
                 new GvdListener(second.controls,ai).onMessageReceived(second.messageEvent);assertTrue(done2.await(5,TimeUnit.SECONDS));
             }
