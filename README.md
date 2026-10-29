@@ -14,7 +14,7 @@ mvn --batch-mode --no-transfer-progress verify
 
 `target/` に、依存ライブラリを含む `java -jar` で起動可能な JAR を 1 件生成する。sources、javadoc、tests、`original-*` の JAR は対象外。成果物は `chatgptviadiscord.jar` に統一する。
 
-現在のアプリケーションは Discord Gateway に接続し、指定サーバーへの参加を確認してオンラインを維持する最小構成。ChatGPT 応答、メッセージ取得、履歴保存はまだ実装していない。
+現在のアプリケーションは Discord Gateway に接続し、指定サーバーへの参加を確認してオンラインを維持する。`/gvd mode` による場所ごとの応答設定保存を実装している。ChatGPT 応答、メッセージ取得、履歴保存はまだ接続していない。
 
 ## CI と VPS デプロイ
 
@@ -24,11 +24,12 @@ mvn --batch-mode --no-transfer-progress verify
 | --- | --- | --- |
 | main への push | 実行 | build 成功後に実行 |
 | main 宛ての pull request | 実行 | 実行しない |
-| 手動実行 | 選択した ref を build | main を選択した場合だけ実行 |
+| 手動実行（通常） | 選択した ref を build | main を選択した場合だけ実行 |
+| 手動実行（定義登録のみ） | 選択した ref を build | グローバルコマンド定義だけ登録し、Bot を再起動しない |
 
 build は利用者が登録する Secrets を参照せず、外部の Discord・OpenAI・DB への接続を前提としない。GitHub が提供するトークンの権限は `contents: read` に限定し、checkout 後の Git 認証情報を保持しない。
 
-JAR、systemd unit、コミット SHA、チェックサムを同一 run の artifact として渡す。deploy は再ビルドせず、その artifact を検証し、`appleboy/scp-action` で転送する。`appleboy/ssh-action` による反映・再起動も同じ deploy ジョブ内で行う。Actions は確認したリリースのコミット SHA に固定する。
+JAR、systemd unit、コマンド登録スクリプト、コミット SHA、チェックサムを同一 run の artifact として渡す。deploy は再ビルドせず、その artifact を検証し、`appleboy/scp-action` で転送する。`appleboy/ssh-action` による反映・再起動も同じ deploy ジョブ内で行う。Actions は確認したリリースのコミット SHA に固定する。
 
 ### デプロイ用設定
 
@@ -72,6 +73,7 @@ Discord Developer Portal で作成した Bot を、対象サーバーへ招待�
 | DISCORD_BOT_TOKEN | discord.bot.token | 必須。Bot の生トークン。Bot という接頭辞は付けない。 |
 | DISCORD_GUILD_ID | discord.guild.id | 必須。参加先サーバーの ID。 |
 | BOT_STARTUP_TIMEOUT_SECONDS | bot.startup.timeout.seconds | READY を待つ秒数。既定 60、指定範囲 5〜300。 |
+| BOT_STATE_DIRECTORY | bot.state.directory | モード・動的キャラの保存先。既定 state（作業ディレクトリ相対）。release の外に置く。 |
 
 環境変数を優先する。ローカルでファイルを使う場合は、config/application.properties.example を config/application.properties にコピーして、本人だけが読める設定にする。このファイルは Git 対象外。実際のトークンはチャット・コマンド引数・シェル履歴へ貼らず、エディタで入力する。
 
@@ -92,3 +94,34 @@ Bot トークンは VPS の /etc/chatgptviadiscord.env に保持し、root:root�
 ops/chatgptviadiscord.env.example と ops/chatgptviadiscord.service を配置例として用意している。CI 経由では専用ユーザーと unit の配置を deploy ジョブが行う。手動起動時もこの定義に合わせ、実設定を用意した後に起動する。
 
 GitHub Secrets は保存後の値を読み出せない。オンライン確認のためにこちらから VPS へ接続する場合は、別途利用できる SSH 接続設定が必要。アプリと設定を準備しただけでは実接続確認済みとしない。
+
+## グローバルコマンドの先行登録
+
+手動実行で register_commands_only を true にすると、指定 ref の /gvd 定義だけを登録する。通常の main 限定デプロイとは別の経路であり、current の切替・unit の更新・Bot の再起動は行わない。既に準備済みの VPS と Python 3 が必要。
+
+登録内容は次の 3 つ。グローバル登録し、使用コンテキストはギルドに限定する。
+
+- /gvd skipch ch:チャンネル
+- /gvd readch ch:チャンネル
+- /gvd mode mode:thread または qa
+
+VPS の既存 EnvironmentFile から Bot トークンを読み、Discord REST API のグローバルコマンド作成・更新エンドポイントに gvd だけを upsert する。他のコマンドをまとめて上書きしない。トークンは GitHub runner や成果物へ取り出さない。
+
+定義登録と Bot の反映は別。`register_commands_only` は Bot を再起動しないため、実行には今回の JAR の反映も必要。mode のハンドラーだけを実装しており、skipch/readch のハンドラー、通常投稿への 👀 と返信、/gvd auth は後続の作業。
+
+## 応答モードと動的キャラ
+
+`/gvd mode thread` / `/gvd mode qa` は実行したチャンネルまたはスレッドの設定を保存する。初期値は qa。親チャンネルと子スレッドは独立しており、親の変更を継承しない。切替には実行場所のチャンネル管理権限が必要。設定は `BOT_STATE_DIRECTORY/response-<guild ID>.properties` に原子的に保存し、再起動後も使う。保存失敗時は変更成功を返さない。
+
+- qa: 通常の1入力1アンサー。キャラロールへのメンションがあれば、その専門性や文脈を反映する。
+- thread: 1入力に対し、複数の AI キャラが連番・キャラ名・`>>番号` の参照を使って掛け合う掲示板形式。8〜16レス・3〜6キャラを目安に、話題に応じて説明・観察・ツッコミを交える。Discord のスレッドを自動作成する機能ではない。
+
+キャラ一覧は固定しない。応答生成側が話題に応じて `CharacterSpec(name, persona)` を提案し、`CharacterRoles.ensureCharacters` が必要な Discord ロールを作成する。同名キャラは保存済みの性格・話し方・ロールIDを再利用する。ロールが削除されていれば再作成する。既存の無関係な同名ロールは引き取らない。名前は Unicode NFKC で正規化し、1応答8キャラ・保存64キャラまで。上限時は既存キャラを再利用する。
+
+ロール名は `GvD: <キャラ名>`。権限なし・メンション可能・メンバーへの自動付与なしで、Bot に「ロールの管理」権限と適切なロール階層が必要。ロールをメンションするのは利用者で、AI 出力では通知を発生させない。これらは AI が演じるキャラの文脈ラベルであり、Discord ユーザーや別 Bot を作成する機能ではない。
+
+**今回の接続範囲:** mode の設定保存は Gateway の実行ハンドラーにつないでいる。動的キャラの作成・保存・ロールIDからのメンション解釈・モード別の応答指示生成は、後続の AI 接続で呼ぶ部品として実装した。thread に切り替えただけではキャラやロールはまだ生成されず、通常投稿への AI 返信も始まらない。コマンドの返信にもこの状態を表示する。
+
+後続の応答処理では、許可サーバー・利用者・場所の検証後、投稿のロールメンションIDを `ResponseContext.prepare` に渡す。返されたモード別指示とキャラ定義、関連履歴・次のレス番号を生成側へ渡し、生成結果のキャラ定義を `CharacterRoles` に渡す。生成結果の構文解析、レス番号の継続保存、Discord の長文分割・通知抑制付き送信は AI 応答実装時に接続する。複数応答からのロール作成はギルドごとに1つの `CharacterRoles` インスタンスで直列化する。ロール作成・保存に失敗した応答を成功扱いしない。
+
+共有チャットからは掲示板形式だけを参照し、個人的な日報本文・画像をソースやテストへ転載していない。

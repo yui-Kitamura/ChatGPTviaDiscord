@@ -13,7 +13,7 @@ import net.dv8tion.jda.api.events.session.ShutdownEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import net.dv8tion.jda.api.requests.GatewayIntent;
 
-/** Gateway connection only: no message listeners, commands, or AI calls yet. */
+/** Gateway connection and response mode settings. AI calls are not connected yet. */
 public final class BotApplication {
     private BotApplication() {}
 
@@ -51,10 +51,12 @@ public final class BotApplication {
             }
 
             CompletableFuture<JDA> ready = new CompletableFuture<>();
+            var settings = new ResponseSettings(config.stateDirectory().resolve("response-" + config.guildId() + ".properties"));
             jda = JDABuilder.createLight(config.token(), EnumSet.noneOf(GatewayIntent.class))
                     .setStatus(OnlineStatus.ONLINE)
                     .setAutoReconnect(true)
                     .setEnableShutdownHook(true)
+                    .addEventListeners(new ModeCommandListener(config.guildId(), settings))
                     .addEventListeners(new ListenerAdapter() {
                         @Override
                         public void onReady(ReadyEvent event) {
