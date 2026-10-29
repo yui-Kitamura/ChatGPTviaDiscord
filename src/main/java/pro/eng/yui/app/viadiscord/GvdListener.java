@@ -91,7 +91,7 @@ final class GvdListener extends ListenerAdapter {
                         .queue(ignored -> {}, failure -> logFailure("COMMAND_REPLY", failure));
                 return;
             }
-            String response = channel.getAsMention() + ("readch".equals(subcommand) ? " はROMります" : " はROMりません");
+            String response = channel.getAsMention() + ("readch".equals(subcommand) ? " ではROMりません" : " ではROMります");
             try {
                 logChannel.sendMessage(response).setAllowedMentions(List.of()).queue(
                         ignored -> hook.editOriginal("デフォルトログチャンネルに結果を投稿しました。")
