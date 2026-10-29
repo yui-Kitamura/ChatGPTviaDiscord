@@ -1,17 +1,40 @@
 package app.viadiscord;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
 
+import net.dv8tion.jda.api.entities.Guild;
+import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
+import net.dv8tion.jda.api.requests.restaction.interactions.ReplyCallbackAction;
 import org.junit.jupiter.api.Test;
 
 class LimitCommandListenerTest {
     private final LimitCommandListener listener = new LimitCommandListener("123456789012345678");
+
+    @Test void repliesPubliclyToTheInvokingInteraction() {
+        var event = mock(SlashCommandInteractionEvent.class);
+        var guild = mock(Guild.class);
+        var action = mock(ReplyCallbackAction.class);
+        when(event.getName()).thenReturn("gvd");
+        when(event.getSubcommandName()).thenReturn("limit");
+        when(event.getGuild()).thenReturn(guild);
+        when(guild.getId()).thenReturn("123456789012345678");
+        when(event.reply(anyString())).thenReturn(action);
+        when(action.setEphemeral(false)).thenReturn(action);
+
+        listener.onSlashCommandInteraction(event);
+
+        verify(event).reply(listener.replyFor(guild.getId()));
+        verify(action).setEphemeral(false);
+        verify(action).queue(any(), any());
+    }
 
     @Test void leavesOtherCommandsToTheirHandlers() {
         assertTrue(LimitCommandListener.handles("gvd", "limit"));
         assertFalse(LimitCommandListener.handles("other", "limit"));
         assertFalse(LimitCommandListener.handles("gvd", "skipch"));
         assertFalse(LimitCommandListener.handles("gvd", "readch"));
+        assertFalse(LimitCommandListener.handles("gvd", "mode"));
         assertFalse(LimitCommandListener.handles("gvd", null));
     }
 

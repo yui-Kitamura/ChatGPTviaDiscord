@@ -28,10 +28,29 @@ def command_definition():
             ]
         ] + [{
             'type': 1,
+            'name': 'mode',
+            'description': 'このチャンネル・スレッドの応答モードを切り替える',
+            'options': [{
+                'type': 3, 'name': 'mode', 'description': '応答形式', 'required': True,
+                'choices': [{'name': name, 'value': name} for name in ['thread', 'qa']],
+            }],
+        }, {
+            'type': 1,
             'name': 'limit',
             'description': 'AIの利用枠・残量と確認先を表示する',
         }],
     }
+
+
+def matches_definition(actual, expected):
+    """Discord may return extra metadata; all requested fields must still match."""
+    if isinstance(expected, dict):
+        return isinstance(actual, dict) and all(
+            key in actual and matches_definition(actual[key], value) for key, value in expected.items())
+    if isinstance(expected, list):
+        return (isinstance(actual, list) and len(actual) == len(expected)
+                and all(matches_definition(a, e) for a, e in zip(actual, expected)))
+    return actual == expected
 
 
 def register(token, opener=urlopen):
@@ -49,7 +68,7 @@ def register(token, opener=urlopen):
     with opener(request, timeout=20) as response:
         command = json.load(response)
     if (command.get('name') != 'gvd' or command.get('guild_id') is not None
-            or [option['name'] for option in command.get('options', [])] != ['skipch', 'readch', 'limit']):
+            or not matches_definition(command.get('options'), command_definition()['options'])):
         raise ValueError('Discord did not confirm the expected global command definition.')
     return command['id']
 
@@ -57,7 +76,7 @@ def register(token, opener=urlopen):
 def main():
     try:
         command_id = register(os.environ.get('DISCORD_BOT_TOKEN', '').strip())
-        print('GLOBAL_COMMAND_REGISTERED name=gvd id=' + command_id + ' subcommands=skipch,readch,limit')
+        print('GLOBAL_COMMAND_REGISTERED name=gvd id=' + command_id + ' subcommands=skipch,readch,mode,limit')
         return 0
     except HTTPError as error:
         print('Command registration failed: Discord HTTP status ' + str(error.code) + '.', file=sys.stderr)

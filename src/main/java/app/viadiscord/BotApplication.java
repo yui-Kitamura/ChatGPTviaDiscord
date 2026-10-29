@@ -1,6 +1,7 @@
 package app.viadiscord;
 
 import java.nio.file.Path;
+import java.io.IOException;
 import java.util.EnumSet;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -13,7 +14,7 @@ import net.dv8tion.jda.api.events.session.ShutdownEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import net.dv8tion.jda.api.requests.GatewayIntent;
 
-/** Discord Gateway connection and limit command. AI calls are not connected yet. */
+/** Discord message acknowledgements, channel controls, and AI limit guidance. */
 public final class BotApplication {
     private BotApplication() {}
 
@@ -50,13 +51,24 @@ public final class BotApplication {
                 return;
             }
 
+            ChannelSettings settings;
+            try {
+                settings = new ChannelSettings(config.stateDirectory().resolve("channel-response.properties"));
+            } catch (IOException e) {
+                System.err.println("Channel settings could not be loaded; refusing to start with default settings.");
+                System.exit(1);
+                return;
+            }
+            GvdListener commands = new GvdListener(new ChannelControls(config.guildId(), settings));
+            var responseSettings = new ResponseSettings(config.stateDirectory().resolve("response-" + config.guildId() + ".properties"));
             CompletableFuture<JDA> ready = new CompletableFuture<>();
-            jda = JDABuilder.createLight(config.token(), EnumSet.noneOf(GatewayIntent.class))
+            jda = JDABuilder.createLight(config.token(), EnumSet.of(GatewayIntent.GUILD_MESSAGES))
                     .setStatus(OnlineStatus.ONLINE)
                     .setAutoReconnect(true)
                     .setEnableShutdownHook(true)
                     .addEventListeners(new LimitCommandListener(config.guildId()))
-                    .addEventListeners(new ListenerAdapter() {
+                    .addEventListeners(new ModeCommandListener(config.guildId(), responseSettings))
+                    .addEventListeners(commands, new ListenerAdapter() {
                         @Override
                         public void onReady(ReadyEvent event) {
                             ready.complete(event.getJDA());

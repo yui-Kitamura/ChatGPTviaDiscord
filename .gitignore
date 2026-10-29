@@ -2,6 +2,7 @@
 /dist/
 /logs/
 /run/
+/state/
 /.env
 /.env.*
 !/.env.example
@@ -10,3 +11,4 @@
 /dependency-reduced-pom.xml
 *.env
 __pycache__/
+/state/

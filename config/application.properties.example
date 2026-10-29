@@ -3,3 +3,4 @@
 discord.bot.token=
 discord.guild.id=
 bot.startup.timeout.seconds=60
+bot.state.directory=state
