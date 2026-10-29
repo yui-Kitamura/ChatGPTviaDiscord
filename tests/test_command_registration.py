@@ -31,11 +31,33 @@ class CommandRegistrationTest(unittest.TestCase):
         payload = json.loads(requests[1].data)
         self.assertEqual([0], payload['contexts'])
         self.assertEqual([0], payload['integration_types'])
-        for subcommand in payload['options']:
+        self.assertEqual(['skipch', 'readch', 'mode'], [item['name'] for item in payload['options']])
+        for subcommand in payload['options'][:2]:
             self.assertEqual(1, subcommand['type'])
             self.assertEqual('ch', subcommand['options'][0]['name'])
             self.assertEqual(7, subcommand['options'][0]['type'])
             self.assertTrue(subcommand['options'][0]['required'])
+        mode = payload['options'][2]['options'][0]
+        self.assertEqual('mode', mode['name'])
+        self.assertEqual(3, mode['type'])
+        self.assertTrue(mode['required'])
+        self.assertEqual([{'name': name, 'value': name} for name in ['thread', 'qa']], mode['choices'])
+
+    def test_incomplete_registration_is_not_reported_as_success(self):
+        def opener(request, timeout):
+            if request.get_method() == 'GET':
+                return io.StringIO(json.dumps({'id': '123456789012345678', 'bot': True}))
+            result = module.command_definition()
+            result['id'] = '234567890123456789'
+            result['options'][2]['options'][0]['choices'] = []
+            return io.StringIO(json.dumps(result))
+        with self.assertRaises(ValueError):
+            module.register('synthetic-token', opener)
+
+    def test_discord_metadata_does_not_invalidate_the_expected_schema(self):
+        actual = module.command_definition()['options']
+        actual[2]['options'][0]['name_localizations'] = None
+        self.assertTrue(module.matches_definition(actual, module.command_definition()['options']))
 
     def test_missing_token_does_not_make_a_network_request(self):
         def forbidden(*args, **kwargs):

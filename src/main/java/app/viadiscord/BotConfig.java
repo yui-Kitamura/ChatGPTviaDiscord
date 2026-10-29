@@ -10,7 +10,7 @@ import java.util.Map;
 import java.util.Properties;
 
 /** Only an explicitly supplied file is read; environment values take priority. */
-record BotConfig(String token, String guildId, Duration startupTimeout) {
+record BotConfig(String token, String guildId, Duration startupTimeout, Path stateDirectory) {
     static BotConfig load(Map<String, String> environment, Path file) throws IOException {
         Properties properties = new Properties();
         if (file != null) {
@@ -42,7 +42,9 @@ record BotConfig(String token, String guildId, Duration startupTimeout) {
         if (timeout < 5 || timeout > 300) {
             throw new IllegalArgumentException("BOT_STARTUP_TIMEOUT_SECONDS must be an integer from 5 to 300.");
         }
-        return new BotConfig(token, guild, Duration.ofSeconds(timeout));
+        String stateDirectory = value(environment, properties, "BOT_STATE_DIRECTORY", "bot.state.directory");
+        return new BotConfig(token, guild, Duration.ofSeconds(timeout),
+                Path.of(stateDirectory.isBlank() ? "state" : stateDirectory));
     }
 
     private static String value(Map<String, String> environment, Properties properties, String name, String key) {

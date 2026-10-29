@@ -26,6 +26,7 @@ class BotConfigTest {
         assertEquals("environment-token", config.token());
         assertEquals(GUILD, config.guildId());
         assertEquals(Duration.ofSeconds(60), config.startupTimeout());
+        assertEquals(Path.of("state"), config.stateDirectory());
         assertFalse(config.toString().contains("environment-token"));
         assertFalse(config.toString().contains("file-token"));
     }
@@ -59,5 +60,11 @@ class BotConfigTest {
                     () -> BotConfig.load(Map.of("DISCORD_BOT_TOKEN", "test-token", "DISCORD_GUILD_ID", GUILD,
                             "BOT_STARTUP_TIMEOUT_SECONDS", timeout), null));
         }
+    }
+
+    @Test void stateDirectoryCanBeConfiguredOutsideTheRelease() throws Exception {
+        var config = BotConfig.load(Map.of("DISCORD_BOT_TOKEN", "test-token", "DISCORD_GUILD_ID", GUILD,
+                "BOT_STATE_DIRECTORY", directory.toString()), null);
+        assertEquals(directory, config.stateDirectory());
     }
 }
