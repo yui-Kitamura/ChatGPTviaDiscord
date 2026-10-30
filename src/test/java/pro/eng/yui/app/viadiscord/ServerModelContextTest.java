@@ -35,35 +35,44 @@ class ServerModelContextTest {
     static void documents(Guild guild) {
         document(guild, "readme", message("server background"));
         document(guild, "agents", message("server guidance"));
+        document(guild, "aboutme", message("server user profile"));
     }
 
-    @Test void readsBothDocumentsOldestFirstAndRefreshesEditsAndDeletes() throws Exception {
+    @Test void readsAllDocumentsOldestFirstAndRefreshesEditsAndDeletes() throws Exception {
         var guild = mock(Guild.class);
         var readme = document(guild, "readme", message("newer"), message("older"));
         document(guild, "agents", message("guidance"));
+        var aboutme = document(guild, "aboutme", message("old profile"));
         var initial = ServerModelContext.load(guild);
         assertTrue(initial.contains("older\nnewer\n"));
         assertTrue(initial.contains("guidance"));
+        assertTrue(initial.contains("old profile"));
         var edited = message("edited");
         when(readme.complete()).thenReturn(List.of(edited));
+        var updatedProfile = message("updated profile");
+        when(aboutme.complete()).thenReturn(List.of(updatedProfile));
         var updated = ServerModelContext.load(guild);
         assertTrue(updated.contains("edited"));
         assertFalse(updated.contains("older"));
+        assertTrue(updated.contains("updated profile"));
+        assertFalse(updated.contains("old profile"));
     }
 
-    @Test void rejectsMissingDuplicateEmptyUnreadableAndOversizedDocuments() throws Exception {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"agents", "aboutme"})
+    void rejectsMissingDuplicateEmptyUnreadableAndOversizedDocuments(String name) throws Exception {
         var guild = mock(Guild.class);
         documents(guild);
-        when(guild.getTextChannelsByName("agents", false)).thenReturn(List.of());
-        assertTrue(assertThrows(ServerModelContext.Unavailable.class, () -> ServerModelContext.load(guild)).getMessage().contains("#agents"));
+        when(guild.getTextChannelsByName(name, false)).thenReturn(List.of());
+        assertTrue(assertThrows(ServerModelContext.Unavailable.class, () -> ServerModelContext.load(guild)).getMessage().contains("#" + name));
         var duplicate = List.of(mock(TextChannel.class), mock(TextChannel.class));
-        when(guild.getTextChannelsByName("agents", false)).thenReturn(duplicate);
+        when(guild.getTextChannelsByName(name, false)).thenReturn(duplicate);
         assertThrows(ServerModelContext.Unavailable.class, () -> ServerModelContext.load(guild));
-        document(guild, "agents", message(" "));
+        document(guild, name, message(" "));
         assertThrows(ServerModelContext.Unavailable.class, () -> ServerModelContext.load(guild));
-        document(guild, "agents", message("x".repeat(32000)));
+        document(guild, name, message("x".repeat(32000)));
         assertThrows(ServerModelContext.Unavailable.class, () -> ServerModelContext.load(guild));
-        var request = document(guild, "agents", message("guidance"));
+        var request = document(guild, name, message("guidance"));
         when(request.complete()).thenThrow(new IllegalStateException("private error body"));
         assertFalse(assertThrows(ServerModelContext.Unavailable.class, () -> ServerModelContext.load(guild)).getMessage().contains("private error body"));
     }
@@ -72,6 +81,7 @@ class ServerModelContextTest {
         var guild = mock(Guild.class);
         var newest = message("newer");when(newest.getId()).thenReturn("123456789012345678");
         var page = java.util.Collections.nCopies(100, newest);
+        documents(guild);
         document(guild, "readme", page.toArray(Message[]::new));
         document(guild, "agents", message("guidance"));
         var channel = guild.getTextChannelsByName("readme", false).getFirst();
