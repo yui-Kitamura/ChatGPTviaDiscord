@@ -36,6 +36,7 @@ class ServerModelContextTest {
         document(guild, "readme", message("server background"));
         document(guild, "agents", message("server guidance"));
         document(guild, "aboutme", message("server user profile"));
+        document(guild, "lib", message("server reference material"));
     }
 
     @Test void readsAllDocumentsOldestFirstAndRefreshesEditsAndDeletes() throws Exception {
@@ -43,23 +44,29 @@ class ServerModelContextTest {
         var readme = document(guild, "readme", message("newer"), message("older"));
         document(guild, "agents", message("guidance"));
         var aboutme = document(guild, "aboutme", message("old profile"));
+        var lib = document(guild, "lib", message("old reference"));
         var initial = ServerModelContext.load(guild);
         assertTrue(initial.contains("older\nnewer\n"));
         assertTrue(initial.contains("guidance"));
         assertTrue(initial.contains("old profile"));
+        assertTrue(initial.contains("old reference"));
         var edited = message("edited");
         when(readme.complete()).thenReturn(List.of(edited));
         var updatedProfile = message("updated profile");
         when(aboutme.complete()).thenReturn(List.of(updatedProfile));
+        var updatedReference = message("updated reference");
+        when(lib.complete()).thenReturn(List.of(updatedReference));
         var updated = ServerModelContext.load(guild);
         assertTrue(updated.contains("edited"));
         assertFalse(updated.contains("older"));
         assertTrue(updated.contains("updated profile"));
         assertFalse(updated.contains("old profile"));
+        assertTrue(updated.contains("updated reference"));
+        assertFalse(updated.contains("old reference"));
     }
 
     @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.ValueSource(strings = {"agents", "aboutme"})
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"agents", "aboutme", "lib"})
     void rejectsMissingDuplicateEmptyUnreadableAndOversizedDocuments(String name) throws Exception {
         var guild = mock(Guild.class);
         documents(guild);
