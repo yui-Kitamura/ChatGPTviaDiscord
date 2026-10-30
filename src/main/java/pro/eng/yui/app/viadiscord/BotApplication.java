@@ -94,7 +94,7 @@ public final class BotApplication {
                     .setAutoReconnect(true)
                     .setEnableShutdownHook(true)
                     .addEventListeners(limitCommand, limitNotifications)
-                    .addEventListeners(new ModeCommandListener(config.guildId(), responseSettings, session))
+                    .addEventListeners(new ModeCommandListener(config.guildId(), responseSettings, session, conversation))
                     .addEventListeners(new AiCommands(config.guildId(), aiConfig, access, accounts, session, transport))
                     .addEventListeners(commands, new ListenerAdapter() {
                         @Override

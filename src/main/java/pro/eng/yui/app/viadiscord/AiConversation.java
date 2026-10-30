@@ -34,6 +34,48 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
         try{worker.submit(()->process(event));}
         catch(RejectedExecutionException e){reply(event.getMessage(),"処理待ちが多いため受け付けられませんでした。後で再投稿してください。");}
     }
+    Future<String> switchMode(net.dv8tion.jda.api.entities.Guild guild,
+                            net.dv8tion.jda.api.entities.channel.middleman.MessageChannel channel, ResponseMode mode) {
+        // Serialize with ordinary replies so an in-flight response cannot restore old numbers.
+        return worker.submit(() -> {
+            settings.setMode(channel.getId(), mode);
+            String result="この場所の応答モードを " + mode.value() + " に保存しました。";
+            if(mode==ResponseMode.QA)return result;
+            try {
+                var account=session.ready(guild.getId());
+                if(account.model.isEmpty())throw new ChatGptException("model_required",0);
+                String key=historyKey(channel.getId(),account);
+                var saved=history.load(key);
+                String request="この場所で新しいスレを始めます。これまでの会話を参考に、スレタイを1つだけ作成してください。タイトル本文だけを100文字以内で返してください。";
+                var input=new ArrayList<>(saved.turns);
+                input.add(Map.of("role","user","content",request));
+                ChatHistory.trim(input);
+                String title=transport.respond(account.accessToken,account.model,
+                        instructions+ServerModelContext.load(guild)+"\n新しいスレタイを作成してください。過去のレス番号は引き継ぎません。",input).strip();
+                if(title.isBlank()||title.length()>100)throw new java.io.IOException("Invalid thread title.");
+                if(!session.isCurrent(guild.getId(),account))throw new ChatGptException("login_required",0);
+                var sent=channel.sendMessage("1：スレタイ\n"+title).setAllowedMentions(List.of()).complete();
+                saved.nextPost=2;
+                saved.postMessages.clear();
+                saved.postMessages.put(1L,sent.getId());
+                // Keep prior turns for title generation only; the new thread starts at this >>1.
+                saved.turns=new ArrayList<>();
+                saved.turns.add(Map.of("role","user","content","新しいスレを開始します。スレタイを >>1 とし、以後は >>2 から続けてください。"));
+                saved.turns.add(Map.of("role","assistant","content","1：スレタイ\n"+title));
+                history.save(key,saved);
+                responseCompleted.run();
+                return result+"\nスレタイを >>1 に投稿し、安価をリセットしました。";
+            } catch(ChatGptException e) {
+                e.log();return result+"\nスレ開始は完了していません。"+e.userMessage();
+            } catch(Exception e) {
+                System.err.println("GVD_THREAD_START_FAILED error_type="+e.getClass().getSimpleName());
+                return result+"\nスレタイ投稿・安価リセットを完了できませんでした。接続・送信権限・保存先を確認して mode thread を再実行してください。";
+            }
+        });
+    }
+    private static String historyKey(String channelId,ChatGptAccounts.Account account) {
+        return channelId+"-"+UUID.nameUUIDFromBytes((account.clientId+":"+account.subject).getBytes(StandardCharsets.UTF_8));
+    }
     private void process(MessageReceivedEvent event) {
         Message message=event.getMessage();String user=event.getAuthor().getId();
         String parent=event.getChannelType().isThread()?event.getChannel().asThreadChannel().getParentChannel().getId():null;
@@ -44,7 +86,7 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
             String content=message.getContentRaw();
             if(content.isBlank()&&message.getAttachments().isEmpty()){reply(message,"本文と添付を読み取れませんでした。Message Content Intentを確認してください。");return;}
             if(content.length()>16000){reply(message,"本文が長いため、分割して投稿してください。");return;}
-            String key=event.getChannel().getId()+"-"+UUID.nameUUIDFromBytes((account.clientId+":"+account.subject).getBytes(StandardCharsets.UTF_8));
+            String key=historyKey(event.getChannel().getId(),account);
             var saved=history.load(key);if(saved.ids.contains(message.getId()))return;
             var input=new ArrayList<>(saved.turns);
             String referencedHistory=ChannelHistoryContext.load(event.getGuild(),event.getMember(),content);

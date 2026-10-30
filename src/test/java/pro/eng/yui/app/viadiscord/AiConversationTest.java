@@ -29,6 +29,55 @@ class AiConversationTest {
         a.scope="chatgpt.tokens.use.direct";a.expiresAt=Instant.now().plusSeconds(3600).getEpochSecond();a.model="chosen";
         accounts.put(ChatGptAccounts.key(ChannelControlsTest.GUILD,"default"),a,true);
     }
+    @Test void modeSwitchStartsAtOneAndQaDoesNotGenerate() throws Exception {
+        var transport=mock(OpenAiTransport.class);
+        when(transport.respond(anyString(),anyString(),anyString(),anyList())).thenReturn("新しい雑談スレ");
+        var h=event(USER,true,"source","question");
+        var channel=h.messageEvent.getChannel();
+        var action=mock(net.dv8tion.jda.api.requests.restaction.MessageCreateAction.class,RETURNS_SELF);
+        when(channel.sendMessage(anyString())).thenReturn(action);
+        var sent=mock(Message.class);when(sent.getId()).thenReturn("987654321098765432");when(action.complete()).thenReturn(sent);
+        var settings=new ResponseSettings(directory.resolve("mode.properties"));
+        var history=new ChatHistory(directory.resolve("history"));
+        String key=ChannelControlsTest.CHANNEL+"-"+UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        var old=history.load(key);old.nextPost=42;old.postMessages.put(1L,"old-first");old.postMessages.put(41L,"old-last");
+        old.turns.add(Map.of("role","user","content","以前の話題"));history.save(key,old);
+        try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)) {
+            account(accounts);
+            try(var ai=new AiConversation(new AiAccess(directory,ROLE),h.controls,session,transport,settings,history,"guide")) {
+                assertTrue(ai.switchMode(h.guild,channel,ResponseMode.THREAD).get(5,TimeUnit.SECONDS).contains(">>1"));
+                verify(channel).sendMessage("1：スレタイ\n新しい雑談スレ");
+                var restarted=history.load(key);
+                assertEquals(2,restarted.nextPost);assertEquals(Map.of(1L,"987654321098765432"),restarted.postMessages);
+                assertEquals(ResponseMode.THREAD,settings.mode(channel.getId()));
+                assertEquals("この場所の応答モードを qa に保存しました。",ai.switchMode(h.guild,channel,ResponseMode.QA).get(5,TimeUnit.SECONDS));
+                assertEquals(ResponseMode.QA,settings.mode(channel.getId()));
+                verify(transport,times(1)).respond(anyString(),anyString(),anyString(),anyList());
+                // Re-entering thread resets the number again, including across a persisted history reload.
+                ai.switchMode(h.guild,channel,ResponseMode.THREAD).get(5,TimeUnit.SECONDS);
+                assertEquals(2,history.load(key).nextPost);
+                verify(channel,times(2)).sendMessage("1：スレタイ\n新しい雑談スレ");
+            }
+        }
+    }
+    @Test void failedThreadTitleDoesNotResetExistingReferencesOrClaimSuccess() throws Exception {
+        var transport=mock(OpenAiTransport.class);
+        when(transport.respond(anyString(),anyString(),anyString(),anyList())).thenThrow(new java.io.IOException("secret upstream"));
+        var h=event(USER,true,"source","question");
+        var settings=new ResponseSettings(directory.resolve("mode.properties"));
+        var history=new ChatHistory(directory.resolve("history"));
+        String key=ChannelControlsTest.CHANNEL+"-"+UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        var old=history.load(key);old.nextPost=42;old.postMessages.put(1L,"old-first");history.save(key,old);
+        try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)) {
+            account(accounts);
+            try(var ai=new AiConversation(new AiAccess(directory,ROLE),h.controls,session,transport,settings,history,"guide")) {
+                String result=ai.switchMode(h.guild,h.messageEvent.getChannel(),ResponseMode.THREAD).get(5,TimeUnit.SECONDS);
+                assertTrue(result.contains("完了できませんでした"));assertFalse(result.contains("secret"));
+                assertEquals(42,history.load(key).nextPost);assertEquals("old-first",history.load(key).postMessages.get(1L));
+                verify(h.messageEvent.getChannel(),never()).sendMessage(anyString());
+            }
+        }
+    }
     @Test void threadCreatesAndReusesRolesWithPersistentNumbersAndMentionContext() throws Exception {
         var calls=new AtomicInteger();var prompt=new AtomicReference<String>();
         var transport=new OpenAiTransport(Duration.ofSeconds(3)){
