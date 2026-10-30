@@ -20,18 +20,21 @@ final class MessageFeedback implements OpenAiTransport.Progress, AutoCloseable {
     MessageFeedback(Message message) {this(message,ignored->{});}
     MessageFeedback(Message message,java.util.function.Consumer<MessageFeedback> cleared) {this.message=message;this.cleared=cleared;}
     void pickedUp() {show("👀");}
-    @Override public void sent() {show("📨");}
+    @Override public void sent() {show("📨",true);}
     @Override public void receiving() {show("⤵️");}
     @Override public void failed() {show("❌");}
 
-    private synchronized void show(String emoji) {
+    private void show(String emoji) {show(emoji,false);}
+    private synchronized void show(String emoji,boolean addFirst) {
         if(closed||emoji.equals(current))return;
+        // Sending explicitly adds the envelope before removing eyes; receiving removes it first.
+        if(addFirst)enqueue(()->message.addReaction(Emoji.fromUnicode(emoji)));
         if(current!=null) {
             String previous=current;
             enqueue(()->message.removeReaction(Emoji.fromUnicode(previous)));
         }
         current=emoji;
-        enqueue(()->message.addReaction(Emoji.fromUnicode(emoji)));
+        if(!addFirst)enqueue(()->message.addReaction(Emoji.fromUnicode(emoji)));
     }
     private void enqueue(Supplier<RestAction<Void>> operation) {
         pending=pending.thenCompose(ignored->{
