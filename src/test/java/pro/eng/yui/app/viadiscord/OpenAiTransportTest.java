@@ -31,6 +31,55 @@ class OpenAiTransportTest {
             assertEquals("data:application/pdf;base64,BAUG",content.get(2).path("file_data").asText());
         }finally{server.stop(0);}
     }
+    @Test void reportsReceivingBeforeTheStreamCompletes() throws Exception {
+        var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+        var receiving=new java.util.concurrent.CountDownLatch(1);
+        var stages=new java.util.concurrent.CopyOnWriteArrayList<String>();
+        server.createContext("/responses",e->{
+            e.getRequestBody().readAllBytes();e.sendResponseHeaders(200,0);
+            e.getResponseBody().write("data: {\"type\":\"response.output_text.delta\",\"delta\":\"answer\"}\n\n".getBytes(StandardCharsets.UTF_8));
+            e.getResponseBody().flush();
+            try {if(!receiving.await(1,java.util.concurrent.TimeUnit.SECONDS))throw new java.io.IOException("Receiving callback missing");}
+            catch(InterruptedException failure){Thread.currentThread().interrupt();throw new java.io.IOException(failure);}
+            e.getResponseBody().write("data: {\"type\":\"response.completed\"}\n\n".getBytes(StandardCharsets.UTF_8));e.close();
+        });server.start();
+        try {
+            var progress=new OpenAiTransport.Progress() {
+                public void sent(){stages.add("sent");}
+                public void receiving(){stages.add("receiving");receiving.countDown();}
+                public void failed(){stages.add("failed");}
+            };
+            assertEquals("answer",transport(server).respond("secret","m","i",List.of(),progress));
+            assertEquals(List.of("sent","receiving"),stages);
+        } finally {server.stop(0);}
+    }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings={"http","failed","incomplete","refusal","malformed"})
+    void ngResponseNeverReportsNormalReceiving(String kind) throws Exception {
+        var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+        var stages=new ArrayList<String>();
+        server.createContext("/responses",e->{
+            e.getRequestBody().readAllBytes();
+            String body=switch(kind) {
+                case "http" -> "{\"error\":{\"code\":\"rate_limit_exceeded\"}}";
+                case "failed" -> "data: {\"type\":\"response.failed\"}\n\n";
+                case "incomplete" -> "data: {\"type\":\"response.incomplete\"}\n\n";
+                case "refusal" -> "data: {\"type\":\"response.refusal.delta\",\"delta\":\"refused\"}\n\ndata: {\"type\":\"response.completed\"}\n\n";
+                default -> "data: invalid-json\n\n";
+            };
+            byte[] data=body.getBytes(StandardCharsets.UTF_8);e.sendResponseHeaders(kind.equals("http")?429:200,data.length);e.getResponseBody().write(data);e.close();
+        });server.start();
+        try {
+            var progress=new OpenAiTransport.Progress() {
+                public void sent(){stages.add("sent");}
+                public void receiving(){stages.add("receiving");}
+                public void failed(){stages.add("failed");}
+            };
+            if(kind.equals("refusal"))assertEquals("refused",transport(server).respond("secret","m","i",List.of(),progress));
+            else assertThrows(java.io.IOException.class,()->transport(server).respond("secret","m","i",List.of(),progress));
+            assertEquals(List.of("sent","failed"),stages);
+        } finally {server.stop(0);}
+    }
     private static Set<String> toSet(Iterator<String> i){var set=new HashSet<String>();i.forEachRemaining(set::add);return set;}
     @Test void oauthDescriptionsBecomeOnlyControlledHintsAndNeverLeakRawText() throws Exception {
         var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);var description=new AtomicReference<String>("");

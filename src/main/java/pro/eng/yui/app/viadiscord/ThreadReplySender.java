@@ -6,7 +6,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 import net.dv8tion.jda.api.entities.Message;
-import net.dv8tion.jda.api.entities.emoji.Emoji;
 import net.dv8tion.jda.api.requests.restaction.MessageCreateAction;
 import net.dv8tion.jda.api.utils.FileUpload;
 
@@ -46,7 +45,5 @@ final class ThreadReplySender {
             saved.postMessages.put(number,sent.getId());
             save.run();
         }
-        try {source.addReaction(Emoji.fromUnicode("✅")).queue(ignored->{},error->{});}
-        catch(RuntimeException error) {System.err.println("GVD_COMPLETION_REACTION_FAILED error_type="+error.getClass().getSimpleName());}
     }
 }
