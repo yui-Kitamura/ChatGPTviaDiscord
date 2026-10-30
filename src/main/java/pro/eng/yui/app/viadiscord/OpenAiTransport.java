@@ -70,7 +70,7 @@ class OpenAiTransport {
             models.add(new Model(model.path("slug").asText(),model.path("display_name").asText()));
         return List.copyOf(models);
     }
-    String respond(String token,String model,String instructions,List<Map<String,String>> history) throws IOException {
+    String respond(String token,String model,String instructions,List<Map<String,Object>> history) throws IOException {
         String payload=ChatGptAccounts.JSON.writeValueAsString(Map.of("model",model,"instructions",instructions,"input",history,"store",false,"stream",true));
         var request=authorized(api.resolve("responses"),token).timeout(timeout).header("Content-Type","application/json").header("Accept","text/event-stream")
                 .POST(HttpRequest.BodyPublishers.ofString(payload)).build();

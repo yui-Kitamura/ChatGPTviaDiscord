@@ -22,6 +22,7 @@ class ThreadReplySenderTest {
     final List<ResponseSettings.CharacterRole> roles=List.of(new ResponseSettings.CharacterRole(character,"456789012345678901"));
 
     ThreadReplySenderTest() {
+        when(source.addReaction(any(net.dv8tion.jda.api.entities.emoji.Emoji.class))).thenReturn(mock(net.dv8tion.jda.api.requests.RestAction.class));
         when(source.getChannel()).thenReturn(channel);when(channel.getId()).thenReturn("123456789012345678");
         var guild=mock(Guild.class);when(source.getGuild()).thenReturn(guild);when(guild.getId()).thenReturn("234567890123456789");
         when(source.reply(anyString())).thenReturn(summary);when(channel.sendMessage(anyString())).thenReturn(post);
@@ -40,12 +41,13 @@ class ThreadReplySenderTest {
         var saved=new ChatHistory.History();var history=new ChatHistory(directory);
         ThreadReplySender.send(source,reply("次の説明。",List.of(1L)),1,roles,saved,()->history.save("123",saved));
         var order=inOrder(source,summary,channel,post);
-        order.verify(source).reply("発言サマリ：権限設定を確認したい。\nAI による掛け合い");
+        order.verify(source).reply("発言サマリ：権限設定を確認したい。");
         order.verify(summary).complete();
         order.verify(channel).sendMessage("1：案内人 <@&456789012345678901>\n確認します。");
         order.verify(post).complete();
         order.verify(channel).sendMessage(contains("2：案内人 <@&456789012345678901>\n[>>1](https://discord.com/channels/"));
         order.verify(post).complete();
+        order.verify(source).addReaction(argThat(emoji->"✅".equals(emoji.getName())));
         verify(post,never()).setMessageReference(anyString());
         verify(summary).mentionRepliedUser(false);verify(summary).setSuppressedNotifications(true);
         verify(post,never()).setSuppressedNotifications(anyBoolean());
@@ -78,6 +80,12 @@ class ThreadReplySenderTest {
         assertThrows(IllegalStateException.class,()->ThreadReplySender.send(source,reply("説明。",List.of()),1,roles,saved,()->history.save("123",saved)));
         assertEquals(Map.of(1L,"345678901234567890"),history.load("123").postMessages);
         verify(post,times(2)).complete();
+        verify(source,never()).addReaction(any(net.dv8tion.jda.api.entities.emoji.Emoji.class));
+    }
+
+    @Test void saveFailureDoesNotMarkCompletion() {
+        assertThrows(java.io.IOException.class,()->ThreadReplySender.send(source,reply("説明。",List.of()),1,roles,new ChatHistory.History(),()->{throw new java.io.IOException();}));
+        verify(source,never()).addReaction(any(net.dv8tion.jda.api.entities.emoji.Emoji.class));
     }
 
     @Test void existingHistoryWithoutMessageMapStillLoads() throws Exception {

@@ -32,8 +32,9 @@ class AiConversationTest {
     @Test void threadCreatesAndReusesRolesWithPersistentNumbersAndMentionContext() throws Exception {
         var calls=new AtomicInteger();var prompt=new AtomicReference<String>();
         var transport=new OpenAiTransport(Duration.ofSeconds(3)){
-            @Override String respond(String token,String model,String instructions,List<Map<String,String>> turns){
+            @Override String respond(String token,String model,String instructions,List<Map<String,Object>> turns){
                 prompt.set(instructions);int n=calls.incrementAndGet();
+                assertTrue(ChatGptAccounts.JSON.valueToTree(turns).toString().contains("data:image/png;base64,AQID"));
                 return CharacterReplyTest.REPLY.replace("[4]",n==1?"[]":"[1]");
             }
         };
@@ -46,6 +47,7 @@ class AiConversationTest {
             account(accounts);var access=new AiAccess(directory,ROLE);
             for(int n=1;n<=2;n++) {
                 var h=event(USER,true,"post-"+n,"question");
+                if(n==1){var image=AttachmentInputTest.attachment("photo.png","image/png",new byte[]{1,2,3});when(h.message.getAttachments()).thenReturn(List.of(image));}
                 var settings=new ResponseSettings(directory.resolve("response.properties"));settings.setMode(ChannelControlsTest.CHANNEL,ResponseMode.THREAD);
                 if(n==2){var role=mock(net.dv8tion.jda.api.entities.Role.class);when(role.getId()).thenReturn("456789012345678901");when(h.message.getMentions().getRoles()).thenReturn(List.of(role));}
                 var channel=h.messageEvent.getChannel();
@@ -78,13 +80,13 @@ class AiConversationTest {
             String key=ChannelControlsTest.CHANNEL+"-"+UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
             var saved=new ChatHistory(directory.resolve("history")).load(key);
             assertEquals(3,saved.nextPost);assertEquals(4,saved.turns.size());
-            assertTrue(saved.turns.get(1).get("content").contains("\"characters\""));
+            assertTrue(saved.turns.get(1).get("content").toString().contains("\"characters\""));
         }
     }
 
     @Test void failedRoleCreationDoesNotCommitAnswerOrAdvanceNumbers() throws Exception {
         var transport=new OpenAiTransport(Duration.ofSeconds(3)){
-            @Override String respond(String token,String model,String instructions,List<Map<String,String>> turns){return CharacterReplyTest.REPLY.replace("[4]","[]");}
+            @Override String respond(String token,String model,String instructions,List<Map<String,Object>> turns){return CharacterReplyTest.REPLY.replace("[4]","[]");}
         };
         try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)){
             account(accounts);var h=event(USER,true,"post","question");var settings=new ResponseSettings(directory.resolve("response.properties"));
@@ -101,9 +103,9 @@ class AiConversationTest {
         }
     }
     @Test void twoDiscordUsersUseSharedAccountAndConversationSurvivesReopen() throws Exception {
-        var input=new AtomicReference<List<Map<String,String>>>();var calls=new AtomicInteger();
+        var input=new AtomicReference<List<Map<String,Object>>>();var calls=new AtomicInteger();
         var transport=new OpenAiTransport(Duration.ofSeconds(3)){
-            @Override String respond(String token,String model,String instructions,List<Map<String,String>> turns){assertEquals("access",token);assertEquals("chosen",model);input.set(List.copyOf(turns));calls.incrementAndGet();return "answer";}
+            @Override String respond(String token,String model,String instructions,List<Map<String,Object>> turns){assertEquals("access",token);assertEquals("chosen",model);input.set(List.copyOf(turns));calls.incrementAndGet();return "answer";}
         };
         try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)){
             account(accounts);var access=new AiAccess(directory,ROLE);var history=new ChatHistory(directory.resolve("history"));
@@ -147,7 +149,7 @@ class AiConversationTest {
 
     @Test void completionCounterOnlyAdvancesAfterSuccessfulAiDelivery() throws Exception {
         var transport=new OpenAiTransport(Duration.ofSeconds(3)) {
-            @Override String respond(String token,String model,String instructions,List<Map<String,String>> turns){return "answer";}
+            @Override String respond(String token,String model,String instructions,List<Map<String,Object>> turns){return "answer";}
         };
         try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)) {
             account(accounts);
@@ -168,4 +170,27 @@ class AiConversationTest {
             }
         }
     }
+    @Test void qaAttachmentOnlyPostReachesProviderAndDownloadFailureDoesNot() throws Exception {
+        var transport=mock(OpenAiTransport.class);
+        when(transport.respond(anyString(),anyString(),anyString(),anyList())).thenReturn("answer");
+        try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)) {
+            account(accounts);
+            for(boolean failed:new boolean[]{false,true}) {
+                var h=event(USER,true,"attachment-"+failed,"");
+                var image=AttachmentInputTest.attachment("a.png","image/png",new byte[]{1,2,3});
+                if(failed)when(image.getProxy().download()).thenReturn(CompletableFuture.failedFuture(new java.io.IOException("private")));
+                when(h.message.getAttachments()).thenReturn(List.of(image));
+                var done=new CountDownLatch(1);doAnswer(i->{done.countDown();return null;}).when(h.reply).queue(any(),any());
+                try(var ai=new AiConversation(new AiAccess(directory,ROLE),h.controls,session,transport,
+                        new ResponseSettings(directory.resolve("response.properties")),new ChatHistory(directory.resolve("history")),"guide")) {
+                    ai.accept(h.messageEvent);assertTrue(done.await(5,TimeUnit.SECONDS));
+                }
+                if(failed)verify(h.message).reply(contains("添付ファイルを取得できません"));
+                else verify(h.message).reply("answer");
+            }
+            verify(transport,times(1)).respond(eq("access"),eq("chosen"),anyString(),argThat(turns->
+                    ChatGptAccounts.JSON.valueToTree(turns).toString().contains("data:image/png;base64,AQID")));
+        }
+    }
+
 }

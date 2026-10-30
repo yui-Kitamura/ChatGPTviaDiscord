@@ -19,9 +19,16 @@ class OpenAiTransportTest {
             e.getResponseHeaders().set("Content-Type","text/event-stream");e.sendResponseHeaders(200,data.length);e.getResponseBody().write(data);e.close();
         });server.start();
         try {
-            assertEquals("こんにちは",transport(server).respond("secret","available-model","guide",List.of(Map.of("role","user","content","hello"))));
+            Object input=AttachmentInput.content("hello",List.of(
+                    AttachmentInputTest.attachment("a.png","image/png",new byte[]{1,2,3}),
+                    AttachmentInputTest.attachment("a.pdf","application/pdf",new byte[]{4,5,6})));
+            assertEquals("こんにちは",transport(server).respond("secret","available-model","guide",List.of(Map.of("role","user","content",input))));
             var r=request.get();assertFalse(r.path("store").asBoolean());assertTrue(r.path("stream").asBoolean());assertTrue(r.path("input").isArray());
             assertEquals(Set.of("model","instructions","input","store","stream"),toSet(r.fieldNames()));
+            var content=r.path("input").get(0).path("content");
+            assertEquals("hello",content.get(0).path("text").asText());
+            assertEquals("data:image/png;base64,AQID",content.get(1).path("image_url").asText());
+            assertEquals("data:application/pdf;base64,BAUG",content.get(2).path("file_data").asText());
         }finally{server.stop(0);}
     }
     private static Set<String> toSet(Iterator<String> i){var set=new HashSet<String>();i.forEachRemaining(set::add);return set;}
