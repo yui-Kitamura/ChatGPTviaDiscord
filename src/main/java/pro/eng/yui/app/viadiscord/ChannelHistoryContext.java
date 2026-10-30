@@ -43,7 +43,7 @@ final class ChannelHistoryContext {
                     for (var message : page) {
                         if (messages.size() == MAX_MESSAGES) { truncated = true; break; }
                         messages.add(message);
-                        characters += message.getContentRaw().length();
+                        characters += MessageInput.from(message).text().length();
                     }
                     if (truncated || page.size() < 100) break;
                     if (characters >= characterBudget) { truncated = true; break; }
@@ -54,9 +54,10 @@ final class ChannelHistoryContext {
                 int size = 0;
                 for (var message : messages) {
                     if (message.getType().isSystem()) continue;
-                    String body = message.getContentRaw();
-                    if (body.isBlank() && message.getAttachments().isEmpty()) continue;
-                    if (!message.getAttachments().isEmpty()) body += "\n[添付あり・本文未取得]";
+                    var received = MessageInput.from(message);
+                    String body = received.text();
+                    if (body.isBlank() && received.attachments().isEmpty()) continue;
+                    if (!received.attachments().isEmpty()) body += "\n[添付あり・本文未取得]";
                     String record = "[" + message.getTimeCreated() + "] " + message.getAuthor().getName()
                             + " (user_id=" + message.getAuthor().getId() + ", bot=" + message.getAuthor().isBot() + ") "
                             + "https://discord.com/channels/" + guild.getId() + "/" + id + "/" + message.getId()

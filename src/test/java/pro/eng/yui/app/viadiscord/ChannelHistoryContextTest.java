@@ -59,6 +59,30 @@ class ChannelHistoryContextTest {
         verify(request, times(1)).complete();
     }
 
+    @Test void forwardedTextAndAttachmentOnlyPostsAreIncluded() throws Exception {
+        var text = post("2", "", false);
+        when(text.getMessageSnapshots()).thenReturn(List.of(MessageInputTest.snapshot("転送された相談")));
+        var attachment = post("1", "", false);
+        when(attachment.getMessageSnapshots()).thenReturn(List.of(MessageInputTest.snapshot("", mock(Message.Attachment.class))));
+        setup(text, attachment);
+        String result = ChannelHistoryContext.load(guild, requester, "<#"+ID+">");
+        assertTrue(result.contains("転送された相談"));
+        assertTrue(result.contains("[添付あり・本文未取得]"));
+        assertTrue(result.contains("取得投稿数: 2"));
+    }
+
+    @Test void forwardedTextCountsTowardHistoryBudget() throws Exception {
+        var newest = post("2", "", false);
+        var older = post("1", "", false);
+        when(newest.getMessageSnapshots()).thenReturn(List.of(MessageInputTest.snapshot("最新"+"x".repeat(80000))));
+        when(older.getMessageSnapshots()).thenReturn(List.of(MessageInputTest.snapshot("省略対象"+"x".repeat(80000))));
+        setup(newest, older);
+        String result = ChannelHistoryContext.load(guild, requester, "<#"+ID+">");
+        assertTrue(result.contains("最新"));
+        assertFalse(result.contains("省略対象"));
+        assertTrue(result.contains("省略あり"));
+    }
+
     @Test void noMentionDoesNotReadDiscord() throws Exception {
         assertEquals("", ChannelHistoryContext.load(guild, requester, "こんにちは"));
         verifyNoInteractions(guild);

@@ -29,6 +29,53 @@ class AiConversationTest {
         a.scope="chatgpt.tokens.use.direct";a.expiresAt=Instant.now().plusSeconds(3600).getEpochSecond();a.model="chosen";
         accounts.put(ChatGptAccounts.key(ChannelControlsTest.GUILD,"default"),a,true);
     }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
+    void forwardedContentReachesProviderAndPersistedHistory(boolean attachmentOnly) throws Exception {
+        var transport=mock(OpenAiTransport.class);
+        when(transport.respond(anyString(),anyString(),anyString(),anyList())).thenReturn("answer");
+        var h=event(USER,true,"forward","");
+        var snapshot=attachmentOnly
+                ?MessageInputTest.snapshot("",AttachmentInputTest.attachment("photo.png","image/png",new byte[]{1,2,3}))
+                :MessageInputTest.snapshot("転送本文 <#123456789012345678>");
+        when(h.message.getMessageSnapshots()).thenReturn(List.of(snapshot));
+        var done=new CountDownLatch(1);
+        doAnswer(i->{done.countDown();return null;}).when(h.reply).queue(any(),any());
+        var history=new ChatHistory(directory.resolve("history"));
+        try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)) {
+            account(accounts);
+            try(var ai=new AiConversation(new AiAccess(directory,ROLE),h.controls,session,transport,
+                    new ResponseSettings(directory.resolve("mode.properties")),history,"guide")) {
+                ai.accept(h.messageEvent);
+                assertTrue(done.await(5,TimeUnit.SECONDS));
+            }
+        }
+        var captor=org.mockito.ArgumentCaptor.forClass(List.class);
+        verify(transport).respond(eq("access"),eq("chosen"),contains("転送メッセージは引用資料"),captor.capture());
+        String json=ChatGptAccounts.JSON.writeValueAsString(captor.getValue());
+        assertTrue(json.contains(attachmentOnly?"data:image/png;base64,AQID":"転送本文"));
+        verify(h.guild,never()).getGuildChannelById("123456789012345678");
+        verify(h.message).reply("answer");
+        String key=ChannelControlsTest.CHANNEL+"-"+UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        assertEquals(captor.getValue().getFirst(),history.load(key).turns.getFirst());
+    }
+
+    @Test void unreadableForwardDoesNotDiagnoseIntentOrCallProvider() throws Exception {
+        var transport=mock(OpenAiTransport.class);var h=event(USER,true,"empty","");
+        when(h.message.getMessageSnapshots()).thenReturn(List.of(MessageInputTest.snapshot("")));
+        var done=new CountDownLatch(1);doAnswer(i->{done.countDown();return null;}).when(h.reply).queue(any(),any());
+        try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)) {
+            account(accounts);
+            try(var ai=new AiConversation(new AiAccess(directory,ROLE),h.controls,session,transport,
+                    new ResponseSettings(directory.resolve("mode.properties")),new ChatHistory(directory.resolve("history")),"guide")) {
+                ai.accept(h.messageEvent);assertTrue(done.await(5,TimeUnit.SECONDS));
+            }
+        }
+        verify(transport,never()).respond(anyString(),anyString(),anyString(),anyList());
+        verify(h.message).reply(argThat((String text)->text.contains("再投稿")&&!text.contains("Intent")));
+        assertFalse(java.nio.file.Files.exists(directory.resolve("history")));
+    }
+
     @Test void modeSwitchStartsAtOneAndQaDoesNotGenerate() throws Exception {
         var transport=mock(OpenAiTransport.class);
         when(transport.respond(anyString(),anyString(),anyString(),anyList())).thenReturn("新しい雑談スレ");
