@@ -33,7 +33,7 @@ class AiConversationTest {
     @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
     void forwardedContentReachesProviderAndPersistedHistory(boolean attachmentOnly) throws Exception {
         var transport=mock(OpenAiTransport.class);
-        when(transport.respond(anyString(),anyString(),anyString(),anyList())).thenReturn("answer");
+        when(transport.respond(anyString(),anyString(),anyString(),anyList(),any(OpenAiTransport.Progress.class))).thenReturn("answer");
         var h=event(USER,true,"forward","");
         var snapshot=attachmentOnly
                 ?MessageInputTest.snapshot("",AttachmentInputTest.attachment("photo.png","image/png",new byte[]{1,2,3}))
@@ -51,13 +51,44 @@ class AiConversationTest {
             }
         }
         var captor=org.mockito.ArgumentCaptor.forClass(List.class);
-        verify(transport).respond(eq("access"),eq("chosen"),contains("転送メッセージは引用資料"),captor.capture());
+        verify(transport).respond(eq("access"),eq("chosen"),contains("転送メッセージは引用資料"),captor.capture(),any(OpenAiTransport.Progress.class));
         String json=ChatGptAccounts.JSON.writeValueAsString(captor.getValue());
         assertTrue(json.contains(attachmentOnly?"data:image/png;base64,AQID":"転送本文"));
         verify(h.guild,never()).getGuildChannelById("123456789012345678");
         verify(h.message).reply("answer");
         String key=ChannelControlsTest.CHANNEL+"-"+UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         assertEquals(captor.getValue().getFirst(),history.load(key).turns.getFirst());
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
+    void providerProgressIsClearedOnlyAfterDiscordOutput(boolean ng) throws Exception {
+        var h=event(USER,true,"progress","question");
+        var stages=new CopyOnWriteArrayList<String>();
+        when(h.reaction.submit()).thenReturn(CompletableFuture.completedFuture(null));
+        when(h.message.removeReaction(any(net.dv8tion.jda.api.entities.emoji.Emoji.class))).thenReturn(h.reaction);
+        doAnswer(i->{stages.add("+"+i.<net.dv8tion.jda.api.entities.emoji.Emoji>getArgument(0).getName());return h.reaction;})
+                .when(h.message).addReaction(any(net.dv8tion.jda.api.entities.emoji.Emoji.class));
+        doAnswer(i->{stages.add("-"+i.<net.dv8tion.jda.api.entities.emoji.Emoji>getArgument(0).getName());return h.reaction;})
+                .when(h.message).removeReaction(any(net.dv8tion.jda.api.entities.emoji.Emoji.class));
+        var queued=new CountDownLatch(1);var delivery=new AtomicReference<java.util.function.Consumer<Message>>();
+        doAnswer(i->{delivery.set(i.getArgument(0));queued.countDown();return null;}).when(h.reply).queue(any(),any());
+        var transport=mock(OpenAiTransport.class);
+        when(transport.respond(anyString(),anyString(),anyString(),anyList(),any(OpenAiTransport.Progress.class))).thenAnswer(i->{
+            var progress=i.<OpenAiTransport.Progress>getArgument(4);progress.sent();
+            if(ng) {progress.failed();throw new ChatGptException("rate_limit_exceeded",429);}
+            progress.receiving();return "answer";
+        });
+        try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)) {
+            account(accounts);
+            try(var ai=new AiConversation(new AiAccess(directory,ROLE),h.controls,session,transport,
+                    new ResponseSettings(directory.resolve("mode.properties")),new ChatHistory(directory.resolve("history")),"guide")) {
+                ai.accept(h.messageEvent);assertTrue(queued.await(5,TimeUnit.SECONDS));
+                assertEquals(List.of("+👀","-👀","+📨","-📨",ng?"+❌":"+⤵️"),stages);
+                delivery.get().accept(h.message);
+                assertEquals(ng?"-❌":"-⤵️",stages.getLast());
+            }
+        }
     }
 
     @Test void unreadableForwardDoesNotDiagnoseIntentOrCallProvider() throws Exception {
@@ -71,14 +102,14 @@ class AiConversationTest {
                 ai.accept(h.messageEvent);assertTrue(done.await(5,TimeUnit.SECONDS));
             }
         }
-        verify(transport,never()).respond(anyString(),anyString(),anyString(),anyList());
+        verify(transport,never()).respond(anyString(),anyString(),anyString(),anyList(),any(OpenAiTransport.Progress.class));
         verify(h.message).reply(argThat((String text)->text.contains("再投稿")&&!text.contains("Intent")));
         assertFalse(java.nio.file.Files.exists(directory.resolve("history")));
     }
 
     @Test void modeSwitchStartsAtOneAndQaDoesNotGenerate() throws Exception {
         var transport=mock(OpenAiTransport.class);
-        when(transport.respond(anyString(),anyString(),anyString(),anyList())).thenReturn("新しい雑談スレ");
+        when(transport.respond(anyString(),anyString(),anyString(),anyList(),any(OpenAiTransport.Progress.class))).thenReturn("新しい雑談スレ");
         var h=event(USER,true,"source","question");
         var channel=h.messageEvent.getChannel();
         var action=mock(net.dv8tion.jda.api.requests.restaction.MessageCreateAction.class,RETURNS_SELF);
@@ -100,7 +131,7 @@ class AiConversationTest {
                 assertEquals(ResponseMode.THREAD,settings.mode(channel.getId()));
                 assertEquals("この場所の応答モードを qa に保存しました。",ai.switchMode(h.guild,channel,ResponseMode.QA).get(5,TimeUnit.SECONDS));
                 assertEquals(ResponseMode.QA,settings.mode(channel.getId()));
-                verify(transport,times(1)).respond(anyString(),anyString(),anyString(),anyList());
+                verify(transport,times(1)).respond(anyString(),anyString(),anyString(),anyList(),any(OpenAiTransport.Progress.class));
                 // Re-entering thread resets the number again, including across a persisted history reload.
                 ai.switchMode(h.guild,channel,ResponseMode.THREAD).get(5,TimeUnit.SECONDS);
                 assertEquals(2,history.load(key).nextPost);
@@ -147,7 +178,7 @@ class AiConversationTest {
     @org.junit.jupiter.params.provider.ValueSource(strings={"overloaded","io","blank","long"})
     void failedThreadTitleRestartsWithFixedFirstPost(String failure) throws Exception {
         var transport=mock(OpenAiTransport.class);
-        var response=when(transport.respond(anyString(),anyString(),anyString(),anyList()));
+        var response=when(transport.respond(anyString(),anyString(),anyString(),anyList(),any(OpenAiTransport.Progress.class)));
         switch(failure) {
             case "overloaded" -> response.thenThrow(new ChatGptException("server_is_overloaded",200));
             case "io" -> response.thenThrow(new java.io.IOException("secret upstream"));
@@ -175,7 +206,7 @@ class AiConversationTest {
                 String expectedPost="## 新しいスレ\n>>1";
                 verify(channel).sendMessage(expectedPost);
                 verify(action).setAllowedMentions(List.of());
-                verify(transport,times(1)).respond(anyString(),anyString(),anyString(),anyList());
+                verify(transport,times(1)).respond(anyString(),anyString(),anyString(),anyList(),any(OpenAiTransport.Progress.class));
                 var restarted=new ChatHistory(directory.resolve("history")).load(key);
                 assertEquals(2,restarted.nextPost);assertEquals(Map.of(1L,"987654321098765432"),restarted.postMessages);
                 assertEquals(2,restarted.turns.size());
@@ -188,7 +219,7 @@ class AiConversationTest {
     @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
     void failedFallbackSendOrSaveDoesNotResetExistingReferencesOrClaimSuccess(boolean failSave) throws Exception {
         var transport=mock(OpenAiTransport.class);
-        when(transport.respond(anyString(),anyString(),anyString(),anyList())).thenThrow(new java.io.IOException("secret upstream"));
+        when(transport.respond(anyString(),anyString(),anyString(),anyList(),any(OpenAiTransport.Progress.class))).thenThrow(new java.io.IOException("secret upstream"));
         var h=event(USER,true,"source","question");
         var action=mock(net.dv8tion.jda.api.requests.restaction.MessageCreateAction.class,RETURNS_SELF);
         when(h.messageEvent.getChannel().sendMessage(anyString())).thenReturn(action);
@@ -219,7 +250,7 @@ class AiConversationTest {
     @Test void threadCreatesAndReusesRolesWithPersistentNumbersAndMentionContext() throws Exception {
         var calls=new AtomicInteger();var prompt=new AtomicReference<String>();
         var transport=new OpenAiTransport(Duration.ofSeconds(3)){
-            @Override String respond(String token,String model,String instructions,List<Map<String,Object>> turns){
+            @Override String respond(String token,String model,String instructions,List<Map<String,Object>> turns,OpenAiTransport.Progress progress){
                 prompt.set(instructions);int n=calls.incrementAndGet();
                 assertTrue(ChatGptAccounts.JSON.valueToTree(turns).toString().contains("data:image/png;base64,AQID"));
                 return CharacterReplyTest.REPLY.replace("[4]",n==1?"[]":"[1]");
@@ -273,7 +304,7 @@ class AiConversationTest {
 
     @Test void failedRoleCreationDoesNotCommitAnswerOrAdvanceNumbers() throws Exception {
         var transport=new OpenAiTransport(Duration.ofSeconds(3)){
-            @Override String respond(String token,String model,String instructions,List<Map<String,Object>> turns){return CharacterReplyTest.REPLY.replace("[4]","[]");}
+            @Override String respond(String token,String model,String instructions,List<Map<String,Object>> turns,OpenAiTransport.Progress progress){return CharacterReplyTest.REPLY.replace("[4]","[]");}
         };
         try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)){
             account(accounts);var h=event(USER,true,"post","question");var settings=new ResponseSettings(directory.resolve("response.properties"));
@@ -292,7 +323,7 @@ class AiConversationTest {
     @Test void twoDiscordUsersUseSharedAccountAndConversationSurvivesReopen() throws Exception {
         var input=new AtomicReference<List<Map<String,Object>>>();var calls=new AtomicInteger();
         var transport=new OpenAiTransport(Duration.ofSeconds(3)){
-            @Override String respond(String token,String model,String instructions,List<Map<String,Object>> turns){assertEquals("access",token);assertEquals("chosen",model);input.set(List.copyOf(turns));calls.incrementAndGet();return "answer";}
+            @Override String respond(String token,String model,String instructions,List<Map<String,Object>> turns,OpenAiTransport.Progress progress){assertEquals("access",token);assertEquals("chosen",model);input.set(List.copyOf(turns));calls.incrementAndGet();return "answer";}
         };
         try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)){
             account(accounts);var access=new AiAccess(directory,ROLE);var history=new ChatHistory(directory.resolve("history"));
@@ -330,7 +361,7 @@ class AiConversationTest {
             try(var ai=new AiConversation(new AiAccess(directory,ROLE),h.controls,session,transport,new ResponseSettings(directory.resolve("response.properties")),new ChatHistory(directory.resolve("history")),"guide")){
                 ai.accept(h.messageEvent);assertTrue(done.await(5,TimeUnit.SECONDS));
             }
-            verify(transport,never()).respond(anyString(),anyString(),anyString(),anyList());
+            verify(transport,never()).respond(anyString(),anyString(),anyString(),anyList(),any(OpenAiTransport.Progress.class));
             verify(h.message).reply(contains("#"+channel));
             assertFalse(java.nio.file.Files.exists(directory.resolve("history")));
         }
@@ -340,7 +371,7 @@ class AiConversationTest {
     void mentionedChannelHistoryReachesModelWithoutPersistingRawTranscript(boolean withAttachment) throws Exception {
         var captured=new AtomicReference<List<Map<String,Object>>>();
         var transport=new OpenAiTransport(Duration.ofSeconds(3)){
-            @Override String respond(String token,String model,String instructions,List<Map<String,Object>> turns){
+            @Override String respond(String token,String model,String instructions,List<Map<String,Object>> turns,OpenAiTransport.Progress progress){
                 captured.set(List.copyOf(turns));return "readback answer";
             }
         };
@@ -386,7 +417,7 @@ class AiConversationTest {
                 ai.onResponseCompleted(completed::incrementAndGet);
                 ai.accept(h.messageEvent);assertTrue(done.await(5,TimeUnit.SECONDS));
             }
-            verify(transport,never()).respond(anyString(),anyString(),anyString(),anyList());
+            verify(transport,never()).respond(anyString(),anyString(),anyString(),anyList(),any(OpenAiTransport.Progress.class));
             verify(h.message).reply(contains("過去ログを取得できません"));
             assertEquals(0,completed.get());
             assertFalse(java.nio.file.Files.exists(directory.resolve("history")));
@@ -395,7 +426,7 @@ class AiConversationTest {
 
     @Test void completionCounterOnlyAdvancesAfterSuccessfulAiDelivery() throws Exception {
         var transport=new OpenAiTransport(Duration.ofSeconds(3)) {
-            @Override String respond(String token,String model,String instructions,List<Map<String,Object>> turns){return "answer";}
+            @Override String respond(String token,String model,String instructions,List<Map<String,Object>> turns,OpenAiTransport.Progress progress){return "answer";}
         };
         try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)) {
             account(accounts);
@@ -418,7 +449,7 @@ class AiConversationTest {
     }
     @Test void qaAttachmentOnlyPostReachesProviderAndDownloadFailureDoesNot() throws Exception {
         var transport=mock(OpenAiTransport.class);
-        when(transport.respond(anyString(),anyString(),anyString(),anyList())).thenReturn("answer");
+        when(transport.respond(anyString(),anyString(),anyString(),anyList(),any(OpenAiTransport.Progress.class))).thenReturn("answer");
         try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)) {
             account(accounts);
             for(boolean failed:new boolean[]{false,true}) {
@@ -435,7 +466,7 @@ class AiConversationTest {
                 else verify(h.message).reply("answer");
             }
             verify(transport,times(1)).respond(eq("access"),eq("chosen"),anyString(),argThat(turns->
-                    ChatGptAccounts.JSON.valueToTree(turns).toString().contains("data:image/png;base64,AQID")));
+                    ChatGptAccounts.JSON.valueToTree(turns).toString().contains("data:image/png;base64,AQID")),any(OpenAiTransport.Progress.class));
         }
     }
 

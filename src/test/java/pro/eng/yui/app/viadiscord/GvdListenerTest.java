@@ -57,6 +57,8 @@ class GvdListenerTest {
         reaction = mock(RestAction.class);
         when(message.reply("botが読みました")).thenReturn(reply);
         when(message.addReaction(any(Emoji.class))).thenReturn(reaction);
+        when(message.removeReaction(any(Emoji.class))).thenReturn(reaction);
+        when(reaction.submit()).thenReturn(java.util.concurrent.CompletableFuture.completedFuture(null));
         var channel = mock(MessageChannelUnion.class);
         when(channel.getId()).thenReturn(CHANNEL);
         messageEvent = mock(MessageReceivedEvent.class);
@@ -71,7 +73,7 @@ class GvdListenerTest {
     @Test void humanMessageGetsEyesAndAnUnmentionedSilentReply() {
         listener.onMessageReceived(messageEvent);
         verify(message).addReaction(argThat(emoji -> "👀".equals(emoji.getName())));
-        verify(reaction).queue(any(), any());
+        verify(reaction).submit();
         verify(message).reply("botが読みました");
         verify(reply).mentionRepliedUser(false);
         verify(reply).setAllowedMentions(argThat(Collection::isEmpty));
@@ -79,6 +81,12 @@ class GvdListenerTest {
         verify(reply).failOnInvalidReply(true);
         verify(reply).queue(any(), any());
         verify(message, never()).getContentRaw();
+    }
+
+    @Test void readReceiptRemovesEyesAfterOutput() {
+        doAnswer(i->{i.<Consumer<Message>>getArgument(0).accept(message);return null;}).when(reply).queue(any(),any());
+        listener.onMessageReceived(messageEvent);
+        verify(message).removeReaction(argThat(e->"👀".equals(e.getName())));
     }
 
     @Test void skipSuppressesBothSideEffects() throws Exception {

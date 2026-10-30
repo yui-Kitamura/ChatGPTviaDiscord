@@ -47,7 +47,7 @@ class ThreadReplySenderTest {
         order.verify(post).complete();
         order.verify(channel).sendMessage(contains("2：案内人 <@&456789012345678901>\n[>>1](https://discord.com/channels/"));
         order.verify(post).complete();
-        order.verify(source).addReaction(argThat(emoji->"✅".equals(emoji.getName())));
+        verify(source,never()).addReaction(any(net.dv8tion.jda.api.entities.emoji.Emoji.class));
         verify(post,never()).setMessageReference(anyString());
         verify(summary).mentionRepliedUser(false);verify(summary).setSuppressedNotifications(true);
         verify(post,never()).setSuppressedNotifications(anyBoolean());

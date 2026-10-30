@@ -5,7 +5,6 @@ import java.util.List;
 import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.MessageType;
 import net.dv8tion.jda.api.entities.channel.ChannelType;
-import net.dv8tion.jda.api.entities.emoji.Emoji;
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
@@ -36,15 +35,14 @@ final class GvdListener extends ListenerAdapter {
         if (!controls.shouldRespond(event.getGuild().getId(), event.getChannel().getId(), parent,
                 event.getAuthor().isBot(), message.isWebhookMessage(), message.getType())) return;
         if (conversation != null) { conversation.accept(event); return; }
+        var feedback=new MessageFeedback(message);
+        feedback.pickedUp();
         try {
-            message.addReaction(Emoji.fromUnicode("👀")).queue(ignored -> {}, failure -> logFailure("REACTION", failure));
+            quietReply(message).queue(ignored -> feedback.clear(), failure -> {
+                logFailure("REPLY", failure);feedback.clear();
+            });
         } catch (RuntimeException failure) {
-            logFailure("REACTION", failure);
-        }
-        try {
-            quietReply(message).queue(ignored -> {}, failure -> logFailure("REPLY", failure));
-        } catch (RuntimeException failure) {
-            logFailure("REPLY", failure);
+            logFailure("REPLY", failure);feedback.clear();
         }
     }
 
