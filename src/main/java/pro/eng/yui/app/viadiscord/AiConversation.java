@@ -36,11 +36,15 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
     }
     Future<String> switchMode(net.dv8tion.jda.api.entities.Guild guild,
                             net.dv8tion.jda.api.entities.channel.middleman.MessageChannel channel, ResponseMode mode) {
+        return switchMode(guild,channel,mode,"");
+    }
+    Future<String> switchMode(net.dv8tion.jda.api.entities.Guild guild,
+                            net.dv8tion.jda.api.entities.channel.middleman.MessageChannel channel, ResponseMode mode, String requestedTitle) {
         // Serialize with ordinary replies so an in-flight response cannot restore old numbers.
         return worker.submit(() -> {
             settings.setMode(channel.getId(), mode);
             String result="この場所の応答モードを " + mode.value() + " に保存しました。";
-            if(mode==ResponseMode.QA)return result;
+            if(mode==ResponseMode.QA)return result+(requestedTitle.isEmpty()?"":"\n"+requestedTitle);
             try {
                 var account=session.ready(guild.getId());
                 if(account.model.isEmpty())throw new ChatGptException("model_required",0);
@@ -50,31 +54,42 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
                 var input=new ArrayList<>(saved.turns);
                 input.add(Map.of("role","user","content",request));
                 ChatHistory.trim(input);
-                String titleInstructions=instructions+ServerModelContext.load(guild)+"\n新しいスレタイを作成してください。過去のレス番号は引き継ぎません。";
-                String title;
+                String context=instructions+ServerModelContext.load(guild);
+                String title=requestedTitle;
+                String opening="新しいスレとして再開します";
                 boolean fallback=false;
                 try {
-                    title=transport.respond(account.accessToken,account.model,titleInstructions,input).strip();
-                    if(title.isBlank()||title.length()>100)throw new java.io.IOException("Invalid thread title.");
+                    if(title.isEmpty()) {
+                        title=transport.respond(account.accessToken,account.model,
+                                context+"\n新しいスレタイを作成してください。過去のレス番号は引き継ぎません。",input).strip();
+                        if(title.isBlank()||title.length()>100||title.contains("\n")||title.contains("\r"))
+                            throw new java.io.IOException("Invalid thread title.");
+                    }
+                    // The opening starts a fresh conversation under the chosen title.
+                    opening=transport.respond(account.accessToken,account.model,
+                            context+"\n新しいスレの >>1 本文を作成してください。見出し・レス番号を付けず、本文だけを1500文字以内で返してください。",
+                            List.of(Map.of("role","user","content","スレタイ："+title+"\nこのタイトルで新しいスレを開始してください。"))).strip();
+                    if(opening.isBlank()||opening.length()>1500)throw new java.io.IOException("Invalid thread opening.");
                 } catch(java.io.IOException e) {
                     if(e instanceof ChatGptException failure)failure.log();
-                    else System.err.println("GVD_THREAD_TITLE_FAILED error_type="+e.getClass().getSimpleName());
-                    title="新しいスレとして";
+                    else System.err.println("GVD_THREAD_GENERATION_FAILED error_type="+e.getClass().getSimpleName());
+                    if(requestedTitle.isEmpty()&&(title.isBlank()||title.length()>100||title.contains("\n")||title.contains("\r")))title="新しいスレ";
+                    opening="新しいスレとして再開します";
                     fallback=true;
                 }
                 if(!session.isCurrent(guild.getId(),account))throw new ChatGptException("login_required",0);
-                String firstPost="## スレタイ\n>>1 "+title;
+                String firstPost="## "+title+"\n>>1 "+opening;
                 var sent=channel.sendMessage(firstPost).setAllowedMentions(List.of()).complete();
                 saved.nextPost=2;
                 saved.postMessages.clear();
                 saved.postMessages.put(1L,sent.getId());
                 // Keep prior turns for title generation only; the new thread starts at this >>1.
                 saved.turns=new ArrayList<>();
-                saved.turns.add(Map.of("role","user","content","新しいスレを開始します。スレタイを >>1 とし、以後は >>2 から続けてください。"));
+                saved.turns.add(Map.of("role","user","content","スレタイ："+title+"\n新しいスレを開始します。以後は >>2 から続けてください。"));
                 saved.turns.add(Map.of("role","assistant","content",firstPost));
                 history.save(key,saved);
                 responseCompleted.run();
-                return result+(fallback?"\nスレタイを生成できなかったため、固定文を >>1 に投稿し、安価をリセットしました。"
+                return result+(fallback?"\nAI生成を完了できなかったため、固定文を >>1 に投稿し、安価をリセットしました。"
                         :"\nスレタイを >>1 に投稿し、安価をリセットしました。");
             } catch(ChatGptException e) {
                 e.log();return result+"\nスレ開始は完了していません。"+e.userMessage();

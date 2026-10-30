@@ -39,14 +39,21 @@ final class ModeCommandListener extends ListenerAdapter {
             event.reply("mode は thread または qa を指定してください。").setEphemeral(false).queue();
             return;
         }
+        var titleOption = event.getOption("title");
+        String title = titleOption == null ? "" : titleOption.getAsString();
+        if (title.length() > 100 || title.contains("\n") || title.contains("\r") || (!title.isEmpty() && title.isBlank())) {
+            event.reply("title は1行・100文字以内のスレタイを指定してください。").setEphemeral(false).queue();
+            return;
+        }
         event.deferReply(false).queue(hook -> worker.submit(() -> {
             try {
                 String result;
                 if (conversation != null) {
-                    result = conversation.switchMode(event.getGuild(), event.getChannel(), mode).get();
+                    result = conversation.switchMode(event.getGuild(), event.getChannel(), mode, title).get();
                 } else {
                     settings.setMode(event.getChannel().getId(), mode);
                     result = "この場所の応答モードを " + mode.value() + " に保存しました。";
+                    if (mode == ResponseMode.QA && !title.isEmpty()) result += "\n" + title;
                     if (mode == ResponseMode.THREAD) result += "\nスレタイ投稿・安価リセットは未完了です。" + status();
                 }
                 hook.editOriginal(result)

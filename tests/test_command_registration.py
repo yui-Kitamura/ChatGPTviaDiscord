@@ -45,6 +45,11 @@ class CommandRegistrationTest(unittest.TestCase):
         self.assertEqual(3, mode['type'])
         self.assertTrue(mode['required'])
         self.assertEqual([{'name': name, 'value': name} for name in ['thread', 'qa']], mode['choices'])
+        title = payload['options'][2]['options'][1]
+        self.assertEqual('title', title['name'])
+        self.assertEqual(3, title['type'])
+        self.assertFalse(title['required'])
+        self.assertEqual(100, title['max_length'])
 
     def test_accept_is_optional_and_reject_requires_a_role(self):
         by_name = {item['name']: item for item in module.command_definition()['options']}
@@ -54,6 +59,11 @@ class CommandRegistrationTest(unittest.TestCase):
         self.assertTrue(by_name['reject']['options'][0]['required'])
         self.assertEqual(['login', 'status', 'use', 'logout'],
                          [choice['value'] for choice in by_name['auth']['options'][0]['choices']])
+
+    def test_missing_mode_title_is_not_reported_as_success(self):
+        actual = module.command_definition()['options']
+        actual[2]['options'].pop()
+        self.assertFalse(module.matches_definition(actual, module.command_definition()['options']))
 
     def test_incomplete_registration_is_not_reported_as_success(self):
         def opener(request, timeout):

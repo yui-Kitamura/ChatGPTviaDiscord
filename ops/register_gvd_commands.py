@@ -33,6 +33,9 @@ def command_definition():
             'options': [{
                 'type': 3, 'name': 'mode', 'description': '応答形式', 'required': True,
                 'choices': [{'name': name, 'value': name} for name in ['thread', 'qa']],
+            }, {
+                'type': 3, 'name': 'title', 'description': 'ユーザー指定のスレタイ（qaではそのまま表示）',
+                'required': False, 'min_length': 1, 'max_length': 100,
             }],
         }, {
             'type': 1, 'name': 'accept', 'description': 'AI利用を許可するロールを追加。省略時は現在使える人を表示',
