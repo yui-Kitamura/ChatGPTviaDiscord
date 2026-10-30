@@ -146,6 +146,63 @@ class AiConversationTest {
             assertFalse(java.nio.file.Files.exists(directory.resolve("history")));
         }
     }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
+    void mentionedChannelHistoryReachesModelWithoutPersistingRawTranscript(boolean withAttachment) throws Exception {
+        var captured=new AtomicReference<List<Map<String,Object>>>();
+        var transport=new OpenAiTransport(Duration.ofSeconds(3)){
+            @Override String respond(String token,String model,String instructions,List<Map<String,Object>> turns){
+                captured.set(List.copyOf(turns));return "readback answer";
+            }
+        };
+        try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)){
+            account(accounts);
+            String content="<#"+ChannelHistoryContextTest.ID+"> の内容readback";
+            var h=event(USER,true,"post",content);
+            if(withAttachment){var image=AttachmentInputTest.attachment("photo.png","image/png",new byte[]{1,2,3});when(h.message.getAttachments()).thenReturn(List.of(image));}
+            var source=new ChannelHistoryContextTest();
+            source.setup(ChannelHistoryContextTest.post("1","source transcript",false));
+            when(h.guild.getGuildChannelById(ChannelHistoryContextTest.ID)).thenReturn(source.channel);
+            when(h.guild.getSelfMember()).thenReturn(source.bot);
+            when(h.messageEvent.getMember().hasPermission(source.channel,net.dv8tion.jda.api.Permission.VIEW_CHANNEL,
+                    net.dv8tion.jda.api.Permission.MESSAGE_HISTORY)).thenReturn(true);
+            var completed=new AtomicInteger();
+            var done=new CountDownLatch(1);doAnswer(i->{i.<java.util.function.Consumer<Message>>getArgument(0).accept(h.message);done.countDown();return null;}).when(h.reply).queue(any(),any());
+            var history=new ChatHistory(directory.resolve("history"));
+            try(var ai=new AiConversation(new AiAccess(directory,ROLE),h.controls,session,transport,
+                    new ResponseSettings(directory.resolve("response.properties")),history,"guide")){
+                ai.onResponseCompleted(completed::incrementAndGet);
+                ai.accept(h.messageEvent);assertTrue(done.await(5,TimeUnit.SECONDS));
+            }
+            assertTrue(captured.get().getLast().get("content").toString().contains("source transcript"));
+            if(withAttachment)assertTrue(captured.get().getLast().get("content").toString().contains("data:image/png;base64,AQID"));
+            String key=ChannelControlsTest.CHANNEL+"-"+UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            Object persisted=history.load(key).turns.getFirst().get("content");
+            assertFalse(persisted.toString().contains("source transcript"));
+            if(withAttachment)assertTrue(persisted.toString().contains("data:image/png;base64,AQID"));
+            else assertEquals(content,persisted);
+            verify(h.message).reply("readback answer");
+            assertEquals(1,completed.get());
+        }
+    }
+
+    @Test void inaccessibleMentionStopsBeforeModelAndHistorySave() throws Exception {
+        var transport=mock(OpenAiTransport.class);
+        try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)){
+            account(accounts);var h=event(USER,true,"1","<#"+ChannelHistoryContextTest.ID+"> readback");
+            var completed=new AtomicInteger();
+            var done=new CountDownLatch(1);doAnswer(i->{i.<java.util.function.Consumer<Message>>getArgument(0).accept(h.message);done.countDown();return null;}).when(h.reply).queue(any(),any());
+            try(var ai=new AiConversation(new AiAccess(directory,ROLE),h.controls,session,transport,
+                    new ResponseSettings(directory.resolve("response.properties")),new ChatHistory(directory.resolve("history")),"guide")){
+                ai.onResponseCompleted(completed::incrementAndGet);
+                ai.accept(h.messageEvent);assertTrue(done.await(5,TimeUnit.SECONDS));
+            }
+            verify(transport,never()).respond(anyString(),anyString(),anyString(),anyList());
+            verify(h.message).reply(contains("過去ログを取得できません"));
+            assertEquals(0,completed.get());
+            assertFalse(java.nio.file.Files.exists(directory.resolve("history")));
+        }
+    }
 
     @Test void completionCounterOnlyAdvancesAfterSuccessfulAiDelivery() throws Exception {
         var transport=new OpenAiTransport(Duration.ofSeconds(3)) {
