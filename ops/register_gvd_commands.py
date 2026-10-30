@@ -54,6 +54,8 @@ def command_definition():
             'type': 1, 'name': 'model', 'description': 'ChatGPTモデルを一覧・選択する',
             'options': [{'type': 3, 'name': 'name', 'description': 'モデルslug（省略時一覧）', 'required': False}],
         }, {
+            'type': 1, 'name': 'trash', 'description': 'チラシの裏の承認済み投稿をゴミ箱へ転送・削除する',
+        }, {
             'type': 1, 'name': 'limit', 'description': 'AIの利用枠・残量と確認先を表示する',
         }],
     }
@@ -119,7 +121,7 @@ def register(token, opener=urlopen):
 def main():
     try:
         command_id = register(os.environ.get('DISCORD_BOT_TOKEN', '').strip())
-        print('GLOBAL_COMMAND_REGISTERED name=gvd id=' + command_id + ' subcommands=skipch,readch,mode,accept,reject,auth,model,limit')
+        print('GLOBAL_COMMAND_REGISTERED name=gvd id=' + command_id + ' subcommands=skipch,readch,mode,accept,reject,auth,model,trash,limit')
         return 0
     except SchemaMismatch as error:
         print('Command registration failed: schema mismatch at ' + error.path + '.', file=sys.stderr)
