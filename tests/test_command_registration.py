@@ -31,7 +31,7 @@ class CommandRegistrationTest(unittest.TestCase):
         payload = json.loads(requests[1].data)
         self.assertEqual([0], payload['contexts'])
         self.assertEqual([0], payload['integration_types'])
-        self.assertEqual(['skipch', 'readch', 'mode', 'accept', 'reject', 'auth', 'model', 'limit'], [item['name'] for item in payload['options']])
+        self.assertEqual(['skipch', 'readch', 'mode', 'accept', 'reject', 'auth', 'model', 'trash', 'limit'], [item['name'] for item in payload['options']])
         limit = next(item for item in payload['options'] if item['name'] == 'limit')
         self.assertEqual(1, limit['type'])
         self.assertFalse(limit.get('options'))
@@ -110,6 +110,14 @@ class CommandRegistrationTest(unittest.TestCase):
             return io.StringIO(json.dumps(result))
         with self.assertRaises(ValueError):
             module.register('synthetic-token', opener)
+
+    def test_trash_has_no_options_and_must_be_registered(self):
+        expected = module.command_definition()['options']
+        trash = next(item for item in expected if item['name'] == 'trash')
+        self.assertEqual(1, trash['type'])
+        self.assertFalse(trash.get('options'))
+        actual = [item for item in expected if item['name'] != 'trash']
+        self.assertFalse(module.matches_definition(actual, expected))
 
     def test_missing_token_does_not_make_a_network_request(self):
         def forbidden(*args, **kwargs):

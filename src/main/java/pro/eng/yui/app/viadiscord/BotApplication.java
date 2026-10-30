@@ -73,12 +73,14 @@ public final class BotApplication {
             var responseSettings = new ResponseSettings(config.stateDirectory().resolve("response-" + config.guildId() + ".properties"));
             var limitCommand = new LimitCommandListener(config.guildId(), session, transport,
                     usageConfig.enabled() ? new CodexUsageClient(usageConfig) : null);
+            var trash = new TrashMessages(config.guildId(), access);
             var limitNotifications = new LimitNotifications(config.guildId(), limitConfig, limitCommand::query);
             var conversation = aiConfig.enabled() ? new AiConversation(access, controls, session, transport, responseSettings,
                     new ChatHistory(config.stateDirectory().resolve("recent-chat")), conversationInstructions()) : null;
             if (conversation != null) conversation.onResponseCompleted(limitNotifications::responseCompleted);
             GvdListener commands = new GvdListener(controls, conversation);
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                trash.close();
                 limitNotifications.close();
                 if (conversation != null) conversation.close();
                 if (session != null) session.close();
@@ -93,7 +95,7 @@ public final class BotApplication {
                     .setStatus(OnlineStatus.ONLINE)
                     .setAutoReconnect(true)
                     .setEnableShutdownHook(true)
-                    .addEventListeners(limitCommand, limitNotifications)
+                    .addEventListeners(limitCommand, limitNotifications, trash)
                     .addEventListeners(new ModeCommandListener(config.guildId(), responseSettings, session, conversation))
                     .addEventListeners(new AiCommands(config.guildId(), aiConfig, access, accounts, session, transport))
                     .addEventListeners(commands, new ListenerAdapter() {
