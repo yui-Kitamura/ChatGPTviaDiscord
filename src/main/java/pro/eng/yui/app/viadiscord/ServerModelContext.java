@@ -18,9 +18,9 @@ final class ServerModelContext {
     }
 
     static String load(Guild guild) throws Unavailable {
-        var result = new StringBuilder("\nサーバー管理文書。#readme は背景、#agents は会話の行動指針として扱う。"
+        var result = new StringBuilder("\nサーバー管理文書。#readme は背景、#agents は会話の行動指針、#aboutme は利用者についての前提情報として扱う。"
                 + "同梱文書と異なる内容はサーバー管理文書を優先する。応答形式や利用可能なツールの制約は維持する。\n");
-        for (String name : new String[]{"readme", "agents"}) {
+        for (String name : new String[]{"readme", "agents", "aboutme"}) {
             try {
                 var channels = guild.getTextChannelsByName(name, false);
                 if (channels.size() != 1) throw new Unavailable(name);
