@@ -293,7 +293,7 @@ class AiConversationTest {
             }
             assertTimeoutPreemptively(Duration.ofSeconds(5),()->{while(completed.get()!=2)Thread.sleep(10);});
             assertEquals(1,created.get());assertEquals(2,calls.get());
-            assertTrue(prompt.get().contains("server background"));assertTrue(prompt.get().contains("server guidance"));assertTrue(prompt.get().contains("server user profile"));
+            assertTrue(prompt.get().contains("server background"));assertTrue(prompt.get().contains("server guidance"));assertTrue(prompt.get().contains("server user profile"));assertTrue(prompt.get().contains("server reference material"));
             assertTrue(prompt.get().contains("先頭レス番号: 2"));assertTrue(prompt.get().contains("今回メンションされたキャラ名: [\"案内人\"]"));
             String key=ChannelControlsTest.CHANNEL+"-"+UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
             var saved=new ChatHistory(directory.resolve("history")).load(key);
@@ -351,7 +351,7 @@ class AiConversationTest {
     }
 
     @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.ValueSource(strings={"agents","aboutme"})
+    @org.junit.jupiter.params.provider.ValueSource(strings={"agents","aboutme","lib"})
     void missingServerDocumentNeverCallsModelOrSavesHistory(String channel) throws Exception {
         var transport=mock(OpenAiTransport.class);
         try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)){
