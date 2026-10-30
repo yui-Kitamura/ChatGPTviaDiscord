@@ -84,7 +84,7 @@ class AiConversationTest {
             try(var ai=new AiConversation(new AiAccess(directory,ROLE),h.controls,session,transport,
                     new ResponseSettings(directory.resolve("mode.properties")),new ChatHistory(directory.resolve("history")),"guide")) {
                 ai.accept(h.messageEvent);assertTrue(queued.await(5,TimeUnit.SECONDS));
-                assertEquals(List.of("+👀","-👀","+📨","-📨",ng?"+❌":"+⤵️"),stages);
+                assertEquals(List.of("+👀","+📨","-👀","-📨",ng?"+❌":"+⤵️"),stages);
                 delivery.get().accept(h.message);
                 assertEquals(ng?"-❌":"-⤵️",stages.getLast());
             }
