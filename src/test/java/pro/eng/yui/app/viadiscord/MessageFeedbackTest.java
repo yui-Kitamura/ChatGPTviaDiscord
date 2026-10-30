@@ -34,7 +34,7 @@ class MessageFeedbackTest {
         var feedback=new MessageFeedback(message);
         feedback.pickedUp();feedback.sent();feedback.receiving();
         feedback.reply("answer",()->{});feedback.close();
-        assertEquals(List.of("+👀","+📨","-👀","-📨","+⤵️"),operations);
+        assertEquals(List.of("+👀","+📨","-👀","+⤵️","-📨"),operations);
         delivered.accept(message);
         assertEquals("-⤵️",operations.getLast());
         verify(message,never()).clearReactions();
@@ -43,7 +43,7 @@ class MessageFeedbackTest {
         for(boolean success:List.of(false,true)) {
             operations.clear();var feedback=new MessageFeedback(message);
             feedback.pickedUp();feedback.sent();feedback.reply("error");feedback.close();
-            assertEquals(List.of("+👀","+📨","-👀","-📨","+❌"),operations);
+            assertEquals(List.of("+👀","+📨","-👀","+❌","-📨"),operations);
             if(success)delivered.accept(message);else rejected.accept(new IllegalStateException());
             assertEquals("-❌",operations.getLast());
         }
@@ -56,7 +56,7 @@ class MessageFeedbackTest {
         feedback.pickedUp();feedback.sent();feedback.receiving();var cleared=feedback.clear();
         assertTrue(operations.isEmpty());assertFalse(cleared.isDone());
         first.complete(null);cleared.get(1,TimeUnit.SECONDS);
-        assertEquals(List.of("+📨","-👀","-📨","+⤵️","-⤵️"),operations);
+        assertEquals(List.of("+📨","-👀","+⤵️","-📨","-⤵️"),operations);
         feedback.receiving();assertEquals(5,operations.size());
     }
     @Test void eyesAreRemovedOnlyAfterEnvelopeAdditionCompletes() throws Exception {
@@ -69,7 +69,25 @@ class MessageFeedbackTest {
         assertEquals(List.of("+👀","+📨"),operations);
         verify(message,never()).removeReaction(any(Emoji.class));
         mailed.complete(null);feedback.clear().get(1,TimeUnit.SECONDS);
-        assertEquals(List.of("+👀","+📨","-👀","-📨","+⤵️","-⤵️"),operations);
+        assertEquals(List.of("+👀","+📨","-👀","+⤵️","-📨","-⤵️"),operations);
+    }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
+    void envelopeRemainsUntilReceivingOrErrorReactionAdditionCompletes(boolean ng) throws Exception {
+        String next=ng?"❌":"⤵️";
+        var added=new CompletableFuture<Void>();
+        var add=action("unused");
+        doAnswer(i->{operations.add("+"+next);return added;}).when(add).submit();
+        when(message.addReaction(argThat(e->next.equals(e.getName())))).thenReturn(add);
+        var feedback=new MessageFeedback(message);
+        feedback.pickedUp();feedback.sent();
+        if(ng)feedback.failed();else feedback.receiving();
+        var cleared=feedback.clear();
+        assertFalse(cleared.isDone());
+        assertEquals(List.of("+👀","+📨","-👀","+"+next),operations);
+        verify(message,never()).removeReaction(argThat(e->"📨".equals(e.getName())));
+        added.complete(null);cleared.get(1,TimeUnit.SECONDS);
+        assertEquals(List.of("+👀","+📨","-👀","+"+next,"-📨","-"+next),operations);
     }
     @Test void reactionFailureDoesNotBlockLaterTransitionsOrCleanup() throws Exception {
         var add=action("unused");doReturn(CompletableFuture.failedFuture(new IllegalStateException())).when(add).submit();
