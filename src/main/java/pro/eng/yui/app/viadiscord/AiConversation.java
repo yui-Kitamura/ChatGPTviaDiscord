@@ -18,6 +18,8 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
     private final String instructions;
     private final java.util.function.Function<net.dv8tion.jda.api.entities.Guild,CharacterRoles.RoleGateway> roleGateway;
     private CharacterRoles characterRoles;
+    private Runnable responseCompleted = () -> {};
+    void onResponseCompleted(Runnable callback) { responseCompleted = java.util.Objects.requireNonNull(callback); }
     private final ExecutorService worker=new ThreadPoolExecutor(1,1,0,TimeUnit.SECONDS,new ArrayBlockingQueue<>(16),Thread.ofVirtual().factory(),new ThreadPoolExecutor.AbortPolicy());
     AiConversation(AiAccess access,ChannelControls controls,ChatGptSession session,OpenAiTransport transport,ResponseSettings settings,ChatHistory history,String instructions) {
         this(access,controls,session,transport,settings,history,instructions,CharacterRoles::discord);
@@ -77,17 +79,21 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
             input.set(input.size()-1,Map.of("role","user","content",content));
             saved.turns=input;saved.turns.add(Map.of("role","assistant","content",response));saved.ids.add(message.getId());
             history.save(key,saved);
-            if(generated==null)reply(message,response);
-            else ThreadReplySender.send(message,generated,firstPost,roles,saved,()->history.save(key,saved));
+            if(generated==null)reply(message,response,responseCompleted);
+            else {
+                ThreadReplySender.send(message,generated,firstPost,roles,saved,()->history.save(key,saved));
+                responseCompleted.run();
+            }
         }catch(ChannelHistoryContext.Unavailable error){reply(message,error.getMessage());}
         catch(ServerModelContext.Unavailable error){reply(message,error.getMessage());}
         catch(ChatGptException error){error.log();reply(message,error.userMessage());}
         catch(Exception error){System.err.println("GVD_AI_FAILED error_type="+error.getClass().getSimpleName());reply(message,"応答または会話の保存を完了できませんでした。時間を置いて再投稿してください。自動再試行はしていません。");}
     }
-    private static void reply(Message message,String text){
+    private static void reply(Message message,String text){ reply(message,text,()->{}); }
+    private static void reply(Message message,String text,Runnable completed){
         var action=message.reply(text.length()<=1900?text:"回答を添付しました。").mentionRepliedUser(false).setAllowedMentions(List.of()).setSuppressedNotifications(true).failOnInvalidReply(true);
         if(text.length()>1900)action.addFiles(FileUpload.fromData(text.getBytes(StandardCharsets.UTF_8),"response.txt"));
-        action.queue(ignored->{},failure->System.err.println("GVD_AI_SEND_FAILED error_type="+failure.getClass().getSimpleName()));
+        action.queue(ignored->completed.run(),failure->System.err.println("GVD_AI_SEND_FAILED error_type="+failure.getClass().getSimpleName()));
     }
     @Override public void close(){worker.shutdownNow();}
 }

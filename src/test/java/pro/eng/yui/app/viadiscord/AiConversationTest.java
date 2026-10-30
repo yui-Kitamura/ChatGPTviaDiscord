@@ -37,7 +37,7 @@ class AiConversationTest {
                 return CharacterReplyTest.REPLY.replace("[4]",n==1?"[]":"[1]");
             }
         };
-        var created=new AtomicInteger();
+        var created=new AtomicInteger();var completed=new AtomicInteger();
         var gateway=new CharacterRoles.RoleGateway(){
             public boolean exists(String id){return "456789012345678901".equals(id);}
             public String create(String name){assertEquals("GvD: 案内人",name);created.incrementAndGet();return "456789012345678901";}
@@ -59,6 +59,7 @@ class AiConversationTest {
                 var beforeSend=new AtomicLong(Long.MAX_VALUE);
                 when(postAction.complete()).thenAnswer(i->{beforeSend.set(java.nio.file.Files.size(historyFile));return sent;});
                 try(var ai=new AiConversation(access,h.controls,session,transport,settings,new ChatHistory(directory.resolve("history")),"guide",guild->gateway)){
+                    ai.onResponseCompleted(completed::incrementAndGet);
                     ai.accept(h.messageEvent);
                     assertTimeoutPreemptively(Duration.ofSeconds(5),()->{
                         while(beforeSend.get()==Long.MAX_VALUE||java.nio.file.Files.size(historyFile)<=beforeSend.get())Thread.sleep(10);
@@ -70,6 +71,7 @@ class AiConversationTest {
                 if(n==2)verify(h.messageEvent.getChannel()).sendMessage(contains("[>>1](https://discord.com/channels/"));
                 assertEquals(1,settings.characters().size());
             }
+            assertTimeoutPreemptively(Duration.ofSeconds(5),()->{while(completed.get()!=2)Thread.sleep(10);});
             assertEquals(1,created.get());assertEquals(2,calls.get());
             assertTrue(prompt.get().contains("server background"));assertTrue(prompt.get().contains("server guidance"));
             assertTrue(prompt.get().contains("先頭レス番号: 2"));assertTrue(prompt.get().contains("今回メンションされたキャラ名: [\"案内人\"]"));
@@ -88,9 +90,11 @@ class AiConversationTest {
             account(accounts);var h=event(USER,true,"post","question");var settings=new ResponseSettings(directory.resolve("response.properties"));
             settings.setMode(ChannelControlsTest.CHANNEL,ResponseMode.THREAD);
             var gateway=new CharacterRoles.RoleGateway(){public boolean exists(String id){return false;}public String create(String name){throw new IllegalStateException("private details");}};
-            var done=new CountDownLatch(1);doAnswer(i->{done.countDown();return null;}).when(h.reply).queue(any(),any());
+            var done=new CountDownLatch(1);var completed=new AtomicInteger();doAnswer(i->{done.countDown();return null;}).when(h.reply).queue(any(),any());
             try(var ai=new AiConversation(new AiAccess(directory,ROLE),h.controls,session,transport,settings,new ChatHistory(directory.resolve("history")),"guide",guild->gateway)){
+                ai.onResponseCompleted(completed::incrementAndGet);
                 ai.accept(h.messageEvent);assertTrue(done.await(5,TimeUnit.SECONDS));
+                assertEquals(0,completed.get());
             }
             verify(h.message).reply(contains("ロール作成・保存を完了できません"));
             assertTrue(settings.characters().isEmpty());assertFalse(java.nio.file.Files.exists(directory.resolve("history")));
@@ -157,16 +161,19 @@ class AiConversationTest {
             when(h.guild.getSelfMember()).thenReturn(source.bot);
             when(h.messageEvent.getMember().hasPermission(source.channel,net.dv8tion.jda.api.Permission.VIEW_CHANNEL,
                     net.dv8tion.jda.api.Permission.MESSAGE_HISTORY)).thenReturn(true);
-            var done=new CountDownLatch(1);doAnswer(i->{done.countDown();return null;}).when(h.reply).queue(any(),any());
+            var completed=new AtomicInteger();
+            var done=new CountDownLatch(1);doAnswer(i->{i.<java.util.function.Consumer<Message>>getArgument(0).accept(h.message);done.countDown();return null;}).when(h.reply).queue(any(),any());
             var history=new ChatHistory(directory.resolve("history"));
             try(var ai=new AiConversation(new AiAccess(directory,ROLE),h.controls,session,transport,
                     new ResponseSettings(directory.resolve("response.properties")),history,"guide")){
+                ai.onResponseCompleted(completed::incrementAndGet);
                 ai.accept(h.messageEvent);assertTrue(done.await(5,TimeUnit.SECONDS));
             }
             assertTrue(captured.get().getLast().get("content").contains("source transcript"));
             String key=ChannelControlsTest.CHANNEL+"-"+UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
             assertEquals(content,history.load(key).turns.getFirst().get("content"));
             verify(h.message).reply("readback answer");
+            assertEquals(1,completed.get());
         }
     }
 
@@ -174,15 +181,41 @@ class AiConversationTest {
         var transport=mock(OpenAiTransport.class);
         try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)){
             account(accounts);var h=event(USER,true,"1","<#"+ChannelHistoryContextTest.ID+"> readback");
-            var done=new CountDownLatch(1);doAnswer(i->{done.countDown();return null;}).when(h.reply).queue(any(),any());
+            var completed=new AtomicInteger();
+            var done=new CountDownLatch(1);doAnswer(i->{i.<java.util.function.Consumer<Message>>getArgument(0).accept(h.message);done.countDown();return null;}).when(h.reply).queue(any(),any());
             try(var ai=new AiConversation(new AiAccess(directory,ROLE),h.controls,session,transport,
                     new ResponseSettings(directory.resolve("response.properties")),new ChatHistory(directory.resolve("history")),"guide")){
+                ai.onResponseCompleted(completed::incrementAndGet);
                 ai.accept(h.messageEvent);assertTrue(done.await(5,TimeUnit.SECONDS));
             }
             verify(transport,never()).respond(anyString(),anyString(),anyString(),anyList());
             verify(h.message).reply(contains("過去ログを取得できません"));
+            assertEquals(0,completed.get());
             assertFalse(java.nio.file.Files.exists(directory.resolve("history")));
         }
     }
 
+    @Test void completionCounterOnlyAdvancesAfterSuccessfulAiDelivery() throws Exception {
+        var transport=new OpenAiTransport(Duration.ofSeconds(3)) {
+            @Override String respond(String token,String model,String instructions,List<Map<String,String>> turns){return "answer";}
+        };
+        try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)) {
+            account(accounts);
+            for(boolean success:new boolean[]{false,true}) {
+                var h=event(USER,true,"post-"+success,"question");
+                var completed=new AtomicInteger();var delivered=new CountDownLatch(1);
+                doAnswer(i->{
+                    if(success)i.<java.util.function.Consumer<Message>>getArgument(0).accept(h.message);
+                    else i.<java.util.function.Consumer<Throwable>>getArgument(1).accept(new IllegalStateException());
+                    delivered.countDown();return null;
+                }).when(h.reply).queue(any(),any());
+                try(var ai=new AiConversation(new AiAccess(directory,ROLE),h.controls,session,transport,
+                        new ResponseSettings(directory.resolve("response.properties")),new ChatHistory(directory.resolve("history")),"guide")) {
+                    ai.onResponseCompleted(completed::incrementAndGet);
+                    ai.accept(h.messageEvent);assertTrue(delivered.await(5,TimeUnit.SECONDS));
+                    assertEquals(success?1:0,completed.get());
+                }
+            }
+        }
+    }
 }

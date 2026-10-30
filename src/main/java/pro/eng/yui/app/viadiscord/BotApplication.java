@@ -40,10 +40,12 @@ public final class BotApplication {
             BotConfig config;
             AiConfig aiConfig;
             CodexUsageConfig usageConfig;
+            LimitNotificationConfig limitConfig;
             try {
                 config = BotConfig.load(System.getenv(), file);
                 aiConfig = AiConfig.load(System.getenv(), file);
                 usageConfig = CodexUsageConfig.load(System.getenv(), file);
+                limitConfig = LimitNotificationConfig.load(System.getenv(), file);
             } catch (IllegalArgumentException e) {
                 // These messages are authored by BotConfig and never include values.
                 System.err.println("Configuration error: " + e.getMessage());
@@ -69,10 +71,15 @@ public final class BotApplication {
             var accounts = aiConfig.enabled() ? new ChatGptAccounts(config.stateDirectory().resolve("chatgpt")) : null;
             var session = aiConfig.enabled() ? new ChatGptSession(accounts, transport, aiConfig.callbackPort()) : null;
             var responseSettings = new ResponseSettings(config.stateDirectory().resolve("response-" + config.guildId() + ".properties"));
+            var limitCommand = new LimitCommandListener(config.guildId(), session, transport,
+                    usageConfig.enabled() ? new CodexUsageClient(usageConfig) : null);
+            var limitNotifications = new LimitNotifications(config.guildId(), limitConfig, limitCommand::query);
             var conversation = aiConfig.enabled() ? new AiConversation(access, controls, session, transport, responseSettings,
                     new ChatHistory(config.stateDirectory().resolve("recent-chat")), conversationInstructions()) : null;
+            if (conversation != null) conversation.onResponseCompleted(limitNotifications::responseCompleted);
             GvdListener commands = new GvdListener(controls, conversation);
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                limitNotifications.close();
                 if (conversation != null) conversation.close();
                 if (session != null) session.close();
                 if (accounts != null) try { accounts.close(); } catch (IOException ignored) {}
@@ -86,8 +93,7 @@ public final class BotApplication {
                     .setStatus(OnlineStatus.ONLINE)
                     .setAutoReconnect(true)
                     .setEnableShutdownHook(true)
-                    .addEventListeners(new LimitCommandListener(config.guildId(), session, transport,
-                            usageConfig.enabled() ? new CodexUsageClient(usageConfig) : null))
+                    .addEventListeners(limitCommand, limitNotifications)
                     .addEventListeners(new ModeCommandListener(config.guildId(), responseSettings, session))
                     .addEventListeners(new AiCommands(config.guildId(), aiConfig, access, accounts, session, transport))
                     .addEventListeners(commands, new ListenerAdapter() {
