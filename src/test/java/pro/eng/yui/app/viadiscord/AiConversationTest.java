@@ -46,7 +46,7 @@ class AiConversationTest {
             account(accounts);
             try(var ai=new AiConversation(new AiAccess(directory,ROLE),h.controls,session,transport,settings,history,"guide")) {
                 assertTrue(ai.switchMode(h.guild,channel,ResponseMode.THREAD).get(5,TimeUnit.SECONDS).contains(">>1"));
-                verify(channel).sendMessage("1：スレタイ\n新しい雑談スレ");
+                verify(channel).sendMessage("## スレタイ\n>>1 新しい雑談スレ");
                 var restarted=history.load(key);
                 assertEquals(2,restarted.nextPost);assertEquals(Map.of(1L,"987654321098765432"),restarted.postMessages);
                 assertEquals(ResponseMode.THREAD,settings.mode(channel.getId()));
@@ -56,7 +56,7 @@ class AiConversationTest {
                 // Re-entering thread resets the number again, including across a persisted history reload.
                 ai.switchMode(h.guild,channel,ResponseMode.THREAD).get(5,TimeUnit.SECONDS);
                 assertEquals(2,history.load(key).nextPost);
-                verify(channel,times(2)).sendMessage("1：スレタイ\n新しい雑談スレ");
+                verify(channel,times(2)).sendMessage("## スレタイ\n>>1 新しい雑談スレ");
             }
         }
     }
@@ -89,13 +89,13 @@ class AiConversationTest {
                 String result=ai.switchMode(h.guild,channel,ResponseMode.THREAD).get(5,TimeUnit.SECONDS);
                 assertTrue(result.contains("固定文を >>1 に投稿し、安価をリセットしました"));
                 assertFalse(result.contains("secret"));assertFalse(result.contains("スレ開始は完了していません"));
-                verify(channel).sendMessage("1：スレタイ\n新しいスレとして再開します");
+                verify(channel).sendMessage("## スレタイ\n>>1 新しいスレとして");
                 verify(action).setAllowedMentions(List.of());
                 verify(transport,times(1)).respond(anyString(),anyString(),anyString(),anyList());
                 var restarted=new ChatHistory(directory.resolve("history")).load(key);
                 assertEquals(2,restarted.nextPost);assertEquals(Map.of(1L,"987654321098765432"),restarted.postMessages);
                 assertEquals(2,restarted.turns.size());
-                assertEquals("1：スレタイ\n新しいスレとして再開します",restarted.turns.get(1).get("content"));
+                assertEquals("## スレタイ\n>>1 新しいスレとして",restarted.turns.get(1).get("content"));
                 assertEquals(ResponseMode.THREAD,settings.mode(channel.getId()));assertEquals(1,completed.get());
             }
         }
@@ -127,7 +127,7 @@ class AiConversationTest {
                 assertTrue(result.contains("完了できませんでした"));assertFalse(result.contains("secret"));
                 var retained=new ChatHistory(directory.resolve(failSave?"history-backup":"history")).load(key);
                 assertEquals(42,retained.nextPost);assertEquals("old-first",retained.postMessages.get(1L));
-                verify(h.messageEvent.getChannel()).sendMessage("1：スレタイ\n新しいスレとして再開します");
+                verify(h.messageEvent.getChannel()).sendMessage("## スレタイ\n>>1 新しいスレとして");
                 assertFalse(result.contains("リセットしました"));
             }
         }

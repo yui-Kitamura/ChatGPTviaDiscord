@@ -59,18 +59,19 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
                 } catch(java.io.IOException e) {
                     if(e instanceof ChatGptException failure)failure.log();
                     else System.err.println("GVD_THREAD_TITLE_FAILED error_type="+e.getClass().getSimpleName());
-                    title="新しいスレとして再開します";
+                    title="新しいスレとして";
                     fallback=true;
                 }
                 if(!session.isCurrent(guild.getId(),account))throw new ChatGptException("login_required",0);
-                var sent=channel.sendMessage("1：スレタイ\n"+title).setAllowedMentions(List.of()).complete();
+                String firstPost="## スレタイ\n>>1 "+title;
+                var sent=channel.sendMessage(firstPost).setAllowedMentions(List.of()).complete();
                 saved.nextPost=2;
                 saved.postMessages.clear();
                 saved.postMessages.put(1L,sent.getId());
                 // Keep prior turns for title generation only; the new thread starts at this >>1.
                 saved.turns=new ArrayList<>();
                 saved.turns.add(Map.of("role","user","content","新しいスレを開始します。スレタイを >>1 とし、以後は >>2 から続けてください。"));
-                saved.turns.add(Map.of("role","assistant","content","1：スレタイ\n"+title));
+                saved.turns.add(Map.of("role","assistant","content",firstPost));
                 history.save(key,saved);
                 responseCompleted.run();
                 return result+(fallback?"\nスレタイを生成できなかったため、固定文を >>1 に投稿し、安価をリセットしました。"
