@@ -60,21 +60,75 @@ class AiConversationTest {
             }
         }
     }
-    @Test void failedThreadTitleDoesNotResetExistingReferencesOrClaimSuccess() throws Exception {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings={"overloaded","io","blank","long"})
+    void failedThreadTitleRestartsWithFixedFirstPost(String failure) throws Exception {
+        var transport=mock(OpenAiTransport.class);
+        var response=when(transport.respond(anyString(),anyString(),anyString(),anyList()));
+        switch(failure) {
+            case "overloaded" -> response.thenThrow(new ChatGptException("server_is_overloaded",200));
+            case "io" -> response.thenThrow(new java.io.IOException("secret upstream"));
+            case "blank" -> response.thenReturn(" ");
+            default -> response.thenReturn("a".repeat(101));
+        }
+        var h=event(USER,true,"source","question");
+        var channel=h.messageEvent.getChannel();
+        var action=mock(net.dv8tion.jda.api.requests.restaction.MessageCreateAction.class,RETURNS_SELF);
+        when(channel.sendMessage(anyString())).thenReturn(action);
+        var sent=mock(Message.class);when(sent.getId()).thenReturn("987654321098765432");when(action.complete()).thenReturn(sent);
+        var settings=new ResponseSettings(directory.resolve("mode.properties"));
+        var history=new ChatHistory(directory.resolve("history"));
+        String key=ChannelControlsTest.CHANNEL+"-"+UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        var old=history.load(key);old.nextPost=42;old.postMessages.put(1L,"old-first");old.postMessages.put(41L,"old-last");
+        old.turns.add(Map.of("role","user","content","以前の話題"));history.save(key,old);
+        var completed=new AtomicInteger();
+        try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)) {
+            account(accounts);
+            try(var ai=new AiConversation(new AiAccess(directory,ROLE),h.controls,session,transport,settings,history,"guide")) {
+                ai.onResponseCompleted(completed::incrementAndGet);
+                String result=ai.switchMode(h.guild,channel,ResponseMode.THREAD).get(5,TimeUnit.SECONDS);
+                assertTrue(result.contains("固定文を >>1 に投稿し、安価をリセットしました"));
+                assertFalse(result.contains("secret"));assertFalse(result.contains("スレ開始は完了していません"));
+                verify(channel).sendMessage("1：スレタイ\n新しいスレとして再開します");
+                verify(action).setAllowedMentions(List.of());
+                verify(transport,times(1)).respond(anyString(),anyString(),anyString(),anyList());
+                var restarted=new ChatHistory(directory.resolve("history")).load(key);
+                assertEquals(2,restarted.nextPost);assertEquals(Map.of(1L,"987654321098765432"),restarted.postMessages);
+                assertEquals(2,restarted.turns.size());
+                assertEquals("1：スレタイ\n新しいスレとして再開します",restarted.turns.get(1).get("content"));
+                assertEquals(ResponseMode.THREAD,settings.mode(channel.getId()));assertEquals(1,completed.get());
+            }
+        }
+    }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
+    void failedFallbackSendOrSaveDoesNotResetExistingReferencesOrClaimSuccess(boolean failSave) throws Exception {
         var transport=mock(OpenAiTransport.class);
         when(transport.respond(anyString(),anyString(),anyString(),anyList())).thenThrow(new java.io.IOException("secret upstream"));
         var h=event(USER,true,"source","question");
+        var action=mock(net.dv8tion.jda.api.requests.restaction.MessageCreateAction.class,RETURNS_SELF);
+        when(h.messageEvent.getChannel().sendMessage(anyString())).thenReturn(action);
         var settings=new ResponseSettings(directory.resolve("mode.properties"));
         var history=new ChatHistory(directory.resolve("history"));
         String key=ChannelControlsTest.CHANNEL+"-"+UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         var old=history.load(key);old.nextPost=42;old.postMessages.put(1L,"old-first");history.save(key,old);
+        if(failSave) {
+            var sent=mock(Message.class);when(sent.getId()).thenReturn("987654321098765432");
+            when(action.complete()).thenAnswer(i->{
+                java.nio.file.Files.move(directory.resolve("history"),directory.resolve("history-backup"));
+                java.nio.file.Files.writeString(directory.resolve("history"),"block history writes");
+                return sent;
+            });
+        } else when(action.complete()).thenThrow(new IllegalStateException("secret discord"));
         try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)) {
             account(accounts);
             try(var ai=new AiConversation(new AiAccess(directory,ROLE),h.controls,session,transport,settings,history,"guide")) {
                 String result=ai.switchMode(h.guild,h.messageEvent.getChannel(),ResponseMode.THREAD).get(5,TimeUnit.SECONDS);
                 assertTrue(result.contains("完了できませんでした"));assertFalse(result.contains("secret"));
-                assertEquals(42,history.load(key).nextPost);assertEquals("old-first",history.load(key).postMessages.get(1L));
-                verify(h.messageEvent.getChannel(),never()).sendMessage(anyString());
+                var retained=new ChatHistory(directory.resolve(failSave?"history-backup":"history")).load(key);
+                assertEquals(42,retained.nextPost);assertEquals("old-first",retained.postMessages.get(1L));
+                verify(h.messageEvent.getChannel()).sendMessage("1：スレタイ\n新しいスレとして再開します");
+                assertFalse(result.contains("リセットしました"));
             }
         }
     }

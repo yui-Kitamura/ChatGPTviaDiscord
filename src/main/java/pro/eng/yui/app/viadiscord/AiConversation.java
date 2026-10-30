@@ -50,9 +50,18 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
                 var input=new ArrayList<>(saved.turns);
                 input.add(Map.of("role","user","content",request));
                 ChatHistory.trim(input);
-                String title=transport.respond(account.accessToken,account.model,
-                        instructions+ServerModelContext.load(guild)+"\n新しいスレタイを作成してください。過去のレス番号は引き継ぎません。",input).strip();
-                if(title.isBlank()||title.length()>100)throw new java.io.IOException("Invalid thread title.");
+                String titleInstructions=instructions+ServerModelContext.load(guild)+"\n新しいスレタイを作成してください。過去のレス番号は引き継ぎません。";
+                String title;
+                boolean fallback=false;
+                try {
+                    title=transport.respond(account.accessToken,account.model,titleInstructions,input).strip();
+                    if(title.isBlank()||title.length()>100)throw new java.io.IOException("Invalid thread title.");
+                } catch(java.io.IOException e) {
+                    if(e instanceof ChatGptException failure)failure.log();
+                    else System.err.println("GVD_THREAD_TITLE_FAILED error_type="+e.getClass().getSimpleName());
+                    title="新しいスレとして再開します";
+                    fallback=true;
+                }
                 if(!session.isCurrent(guild.getId(),account))throw new ChatGptException("login_required",0);
                 var sent=channel.sendMessage("1：スレタイ\n"+title).setAllowedMentions(List.of()).complete();
                 saved.nextPost=2;
@@ -64,7 +73,8 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
                 saved.turns.add(Map.of("role","assistant","content","1：スレタイ\n"+title));
                 history.save(key,saved);
                 responseCompleted.run();
-                return result+"\nスレタイを >>1 に投稿し、安価をリセットしました。";
+                return result+(fallback?"\nスレタイを生成できなかったため、固定文を >>1 に投稿し、安価をリセットしました。"
+                        :"\nスレタイを >>1 に投稿し、安価をリセットしました。");
             } catch(ChatGptException e) {
                 e.log();return result+"\nスレ開始は完了していません。"+e.userMessage();
             } catch(Exception e) {
