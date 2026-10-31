@@ -7,6 +7,7 @@ import net.dv8tion.jda.api.entities.MessageType;
 import net.dv8tion.jda.api.entities.channel.ChannelType;
 import net.dv8tion.jda.api.entities.emoji.Emoji;
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
+import net.dv8tion.jda.api.events.interaction.component.ButtonInteractionEvent;
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import net.dv8tion.jda.api.interactions.commands.OptionMapping;
@@ -54,6 +55,11 @@ final class GvdListener extends ListenerAdapter {
                 .setAllowedMentions(List.of())
                 .setSuppressedNotifications(true)
                 .failOnInvalidReply(true);
+    }
+
+    @Override
+    public void onButtonInteraction(ButtonInteractionEvent event) {
+        if (conversation instanceof AiConversation ai) ai.retry(event);
     }
 
     @Override
