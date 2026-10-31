@@ -228,7 +228,7 @@ sudo journalctl -u chatgptviadiscord.service --since "30 minutes ago" --no-pager
 
 `source_id` は元投稿またはコマンドの interaction ID。定期通知は通知先チャンネル ID、定期処理は対象サーバー ID を使う場合がある。投稿 ID が分かる場合は `journalctl` の出力を `grep 'source_id=<投稿ID>'` で絞れる。認証コールバックなど対応する投稿がない処理は `none` になる。
 
-`operation` は失敗した操作、`reason` は添付・文書・履歴の失敗分類、`target` は対象添付／参照先の ID または文書種別。添付の `declared_bytes` は元添付の申告サイズ、`actual_bytes` は元URLから読み取ったサイズで、未取得時は `-1`。画像プロキシは変換されるためサイズ比較には使わない。
+`operation` は失敗した操作、`reason` は添付・文書・履歴の失敗分類、`target` は対象添付／参照先の ID または文書種別。添付の `declared_bytes` は元添付の申告サイズ、`actual_bytes` は元URLから読み取ったサイズで、未取得時は `-1`。`expected_bytes` はHTTP応答のContent-Length（なければ応答ボディが示す長さ）。添付メタデータの申告サイズは転送の完全性判定に使わず、未圧縮のHTTP応答の長さと実取得サイズを照合する。gzip等で展開される応答や長さ不明の場合は `expected_bytes=-1` とし、HTTP転送層の途中切断検出に委ねる。実取得データの合計10 MiB制限とタイムアウトは維持する。申告値と実取得サイズの差は拒否理由にせず、`GVD_ATTACHMENT_SIZE_DIFFERENCE` に記録する。
 
 `causes` と `sites` は最大8段の例外型とアプリ内の発生箇所。利用できる場合は `http_status` と `discord_code` も記録する。例外本文・会話本文・添付名・URL・認証情報は出力しない。Discordへ返す案内文は診断情報と分離する。取得失敗の過去ログは後から補完されないため、更新後に再現した投稿の ID で確認する。
 
