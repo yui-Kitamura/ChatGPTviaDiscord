@@ -39,7 +39,12 @@ final class ForwardMessageBatcher implements AutoCloseable {
     }
     private void schedule(String key, MessageReceivedEvent event, long receivedAt) {
         long remaining = Math.max(0, window - TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - receivedAt));
-        pending.put(key, new Pending(event, receivedAt, timer.schedule(() -> flush(key), remaining, TimeUnit.MILLISECONDS)));
+        pending.put(key, new Pending(event, receivedAt, timer.schedule(() -> flushIfCurrent(key, event), remaining, TimeUnit.MILLISECONDS)));
+    }
+    private synchronized void flushIfCurrent(String key, MessageReceivedEvent expected) {
+        var item = pending.get(key);
+        // A canceled timeout may already be waiting for this monitor. Never flush its successor.
+        if (item != null && item.event() == expected) flush(key);
     }
     private synchronized void flush(String key) {
         Pending item = pending.remove(key);
