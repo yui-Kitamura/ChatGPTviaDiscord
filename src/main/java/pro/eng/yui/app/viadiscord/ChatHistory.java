@@ -15,6 +15,19 @@ final class ChatHistory {
     }
     private final Path directory;
     ChatHistory(Path directory){this.directory=directory;}
+    synchronized String replyBody(String key,String messageId) throws IOException {
+        return replies(key).get(messageId);
+    }
+    synchronized void saveReply(String key,String messageId,String body) throws IOException {
+        var replies=replies(key);replies.put(messageId,body);
+        while(replies.size()>40||replies.values().stream().mapToInt(String::length).sum()>256000)replies.remove(replies.keySet().iterator().next());
+        PrivateFiles.write(replyPath(key),ChatGptAccounts.JSON.writeValueAsString(replies));
+    }
+    private LinkedHashMap<String,String> replies(String key) throws IOException {
+        var file=replyPath(key);
+        return Files.exists(file)?ChatGptAccounts.JSON.readValue(Files.readString(file),new com.fasterxml.jackson.core.type.TypeReference<LinkedHashMap<String,String>>(){}):new LinkedHashMap<>();
+    }
+    private Path replyPath(String key){return path(key).resolveSibling(key+".replies.json");}
     History load(String key) throws IOException {
         var file=path(key);var value=Files.exists(file)?ChatGptAccounts.JSON.readValue(Files.readString(file),History.class):new History();
         if(value.postMessages==null)value.postMessages=new LinkedHashMap<>();
