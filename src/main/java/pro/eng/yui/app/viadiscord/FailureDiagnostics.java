@@ -9,7 +9,8 @@ final class FailureDiagnostics {
         DOWNLOAD_INTERRUPTED, DOWNLOAD_TIMEOUT, READ_TIMEOUT, DOWNLOAD_FAILED,
         CHANNEL_COUNT, MESSAGE_LIMIT, CHARACTER_LIMIT, EMPTY_DOCUMENT, FETCH_FAILED,
         CHANNEL_UNAVAILABLE, PERMISSION_DENIED, THREAD_MEMBERSHIP, HISTORY_EMPTY }
-    record Details(Reason reason,String target,long declaredBytes,long actualBytes) {
+    record Details(Reason reason,String target,long declaredBytes,long actualBytes,long expectedBytes) {
+        Details(Reason reason,String target,long declaredBytes,long actualBytes){this(reason,target,declaredBytes,actualBytes,-1);}
         Details(Reason reason,String target) {this(reason,target,-1,-1);}
     }
     interface Classified {Details details();}
@@ -51,9 +52,13 @@ final class FailureDiagnostics {
                 }
             }
         }
-        System.err.printf("GVD_FAILURE operation=%s source_id=%s reason=%s target=%s declared_bytes=%d actual_bytes=%d causes=%s sites=%s http_status=%d discord_code=%d%n",
-                token(operation),snowflake(sourceId),detail.reason(),token(detail.target()),detail.declaredBytes(),detail.actualBytes(),
+        System.err.printf("GVD_FAILURE operation=%s source_id=%s reason=%s target=%s declared_bytes=%d actual_bytes=%d expected_bytes=%d causes=%s sites=%s http_status=%d discord_code=%d%n",
+                token(operation),snowflake(sourceId),detail.reason(),token(detail.target()),detail.declaredBytes(),detail.actualBytes(),detail.expectedBytes(),
                 causes.isEmpty()?"none":String.join(">",causes),sites.isEmpty()?"none":String.join(">",sites),http,discord);
+    }
+    static void attachmentSizeDifference(String attachmentId,long declared,long actual,long expected) {
+        System.err.printf("GVD_ATTACHMENT_SIZE_DIFFERENCE source_id=%s attachment_id=%s declared_bytes=%d actual_bytes=%d expected_bytes=%d%n",
+                snowflake(SOURCE.get()),snowflake(attachmentId),declared,actual,expected);
     }
     private static String token(String value) {return value!=null&&value.matches("[a-zA-Z0-9_-]{1,100}")?value:"none";}
     private static String snowflake(String value) {return value!=null&&value.matches("[0-9]{1,20}")?value:"none";}

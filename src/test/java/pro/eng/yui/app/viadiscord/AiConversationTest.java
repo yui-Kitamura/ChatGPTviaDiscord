@@ -585,11 +585,41 @@ class AiConversationTest {
             }
         }
     }
+    @Test void completeImageWithDifferentMetadataSizeReachesAi() throws Exception {
+        var transport=mock(OpenAiTransport.class);
+        when(transport.respond(anyString(),anyString(),anyString(),anyList(),any(OpenAiTransport.Progress.class))).thenReturn("answer");
+        var h=event(USER,true,"1566086546992533535","");
+        var image=AttachmentInputTest.attachment("pc.jpg","image/jpeg",new byte[242093]);
+        when(image.getSize()).thenReturn(197778);when(h.message.getAttachments()).thenReturn(List.of(image));
+        AttachmentHttpFixture.lengths.put(image.getUrl(),242093L);
+        var delivered=new CountDownLatch(1);
+        doAnswer(i->{delivered.countDown();return null;}).when(h.reply).queue(any(),any());
+        try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)) {
+            account(accounts);
+            try(var ai=new AiConversation(new AiAccess(directory,ROLE),h.controls,session,transport,
+                    new ResponseSettings(directory.resolve("response.properties")),new ChatHistory(directory.resolve("history")),"guide")) {
+                String log=FailureDiagnosticsTest.capture(()->{
+                    ai.accept(h.messageEvent);
+                    try{assertTrue(delivered.await(5,TimeUnit.SECONDS));}
+                    catch(InterruptedException e){throw new AssertionError(e);}
+                });
+                assertTrue(log.contains("GVD_ATTACHMENT_SIZE_DIFFERENCE source_id=1566086546992533535"));
+                assertFalse(log.contains("operation=ATTACHMENT"));verify(h.message).reply("answer");
+                verify(transport).respond(eq("access"),eq("chosen"),anyString(),argThat(turns->{
+                    return turns.stream().filter(turn->"user".equals(turn.get("role")))
+                            .map(turn->turn.get("content")).filter(content->content instanceof List<?>)
+                            .flatMap(content->((List<?>)content).stream()).filter(part->part instanceof Map<?,?>)
+                            .map(part->((Map<?,?>)part).get("image_url")).filter(data->data instanceof String)
+                            .anyMatch(data->{String value=(String)data;return Base64.getDecoder().decode(value.substring(value.indexOf(',')+1)).length==242093;});
+                }),any(OpenAiTransport.Progress.class));
+            }
+        }
+    }
     @Test void attachmentFailureLogsSourceAndSizesBeforeReplyWithoutCallingAi() throws Exception {
         var transport=mock(OpenAiTransport.class);
         var h=event(USER,true,"1566000639157473370","");
         var image=AttachmentInputTest.attachment("private-photo.jpg","image/jpeg",new byte[]{1,2,3});
-        when(image.getSize()).thenReturn(4);when(h.message.getAttachments()).thenReturn(List.of(image));
+        when(image.getSize()).thenReturn(4);AttachmentHttpFixture.lengths.put(image.getUrl(),5L);when(h.message.getAttachments()).thenReturn(List.of(image));
         var delivered=new CountDownLatch(1);
         doAnswer(i->{delivered.countDown();return null;}).when(h.reply).queue(any(),any());
         try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)) {

@@ -15,8 +15,11 @@ final class AttachmentInput {
     static final class Unavailable extends IOException implements FailureDiagnostics.Classified {
         private final FailureDiagnostics.Details details;
         Unavailable(String message,FailureDiagnostics.Reason reason,Message.Attachment attachment,long actual,Throwable cause) {
+            this(message,reason,attachment,actual,cause,-1);
+        }
+        Unavailable(String message,FailureDiagnostics.Reason reason,Message.Attachment attachment,long actual,Throwable cause,long expected) {
             super(message,cause);
-            details=new FailureDiagnostics.Details(reason,attachment.getId(),attachment.getSize(),actual);
+            details=new FailureDiagnostics.Details(reason,attachment.getId(),attachment.getSize(),actual,expected);
         }
         @Override public FailureDiagnostics.Details details(){return details;}
     }
@@ -57,10 +60,38 @@ final class AttachmentInput {
         return dot<0?"":name.substring(dot+1).toLowerCase(Locale.ROOT);
     }
     private static Unavailable tooLarge(Message.Attachment attachment,long actual){return new Unavailable("添付の合計は1投稿10 MiBまでです。ファイルを分割・縮小して再投稿してください。AIへの送信は行っていません。",FailureDiagnostics.Reason.SIZE_LIMIT,attachment,actual,null);}
+    /** Captures the HTTP entity size before JDA decodes Content-Encoding. */
+    private static final class OriginalDownload extends NamedAttachmentProxy {
+        private final java.util.concurrent.atomic.AtomicLong expectedBytes=new java.util.concurrent.atomic.AtomicLong(-1);
+        OriginalDownload(Message.Attachment attachment){super(attachment.getUrl(),attachment.getFileName());}
+        @Override protected okhttp3.OkHttpClient getHttpClient() {
+            var builder=super.getHttpClient().newBuilder();
+            // Observe the final response after the shared client's interceptors have run.
+            builder.interceptors().add(0,chain->{
+                var response=chain.proceed(chain.request());
+                if(response.code()!=200||response.header("Content-Range")!=null) {
+                    int status=response.code();response.close();
+                    throw new IOException("Attachment HTTP response is not a complete entity (status "+status+").");
+                }
+                String encoding=response.header("Content-Encoding");
+                // A compressed entity length cannot be compared to JDA's decoded stream.
+                long length=-1;
+                if(encoding==null||encoding.equalsIgnoreCase("identity")) {
+                    String header=response.header("Content-Length");
+                    if(header!=null) {
+                        try{length=Long.parseLong(header);}catch(NumberFormatException ignored){}
+                    } else if(response.body()!=null)length=response.body().contentLength();
+                }
+                expectedBytes.set(length<0?-1:length);
+                return response;
+            });
+            return builder.build();
+        }
+    }
     private static byte[] download(Message.Attachment attachment,int remaining) throws IOException {
-        // Metadata size describes the original, not Discord's transformed image proxy.
+        OriginalDownload source;
         CompletableFuture<InputStream> future;
-        try {future=new NamedAttachmentProxy(attachment.getUrl(),attachment.getFileName()).download();}
+        try {source=new OriginalDownload(attachment);future=source.download();}
         catch(RuntimeException error){throw unavailable(attachment,FailureDiagnostics.Reason.DOWNLOAD_FAILED,-1,error);}
         try {
             try(var input=future.get(30,TimeUnit.SECONDS);
@@ -71,7 +102,12 @@ final class AttachmentInput {
                     byte[] bytes=input.readNBytes(remaining+1);
                     if(timedOut.get())throw unavailable(attachment,FailureDiagnostics.Reason.READ_TIMEOUT,bytes.length,null);
                     if(bytes.length>remaining)throw tooLarge(attachment,bytes.length);
-                    if(bytes.length!=attachment.getSize())throw unavailable(attachment,FailureDiagnostics.Reason.SIZE_MISMATCH,bytes.length,null);
+                    long expected=source.expectedBytes.get();
+                    if(expected>=0&&bytes.length!=expected)
+                        throw new Unavailable("添付ファイルを取得できませんでした。添付を再投稿してください。AIへの送信は行っていません。",
+                                FailureDiagnostics.Reason.SIZE_MISMATCH,attachment,bytes.length,null,expected);
+                    if(bytes.length!=attachment.getSize())
+                        FailureDiagnostics.attachmentSizeDifference(attachment.getId(),attachment.getSize(),bytes.length,expected);
                     return bytes;
                 } catch(Unavailable error){throw error;}
                 catch(IOException error){throw unavailable(attachment,timedOut.get()?FailureDiagnostics.Reason.READ_TIMEOUT:FailureDiagnostics.Reason.DOWNLOAD_FAILED,-1,error);}
