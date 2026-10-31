@@ -129,7 +129,7 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
                 var saved=history.load(key);if(saved.ids.contains(message.getId()))return;
                 var input=new ArrayList<>(saved.turns);
                 String referencedHistory=ChannelHistoryContext.load(event.getGuild(),event.getMember(),message.getContentRaw());
-                Object userContent=AttachmentInput.content(content,received.attachments());
+                Object userContent=AttachmentInput.content(DiscordReplyContext.input(message,history,key,content),received.attachments());
                 input.add(Map.of("role","user","content",userContent));
                 ChatHistory.trim(input);
                 Object requestContent=userContent;
@@ -174,9 +174,13 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
                 input.set(input.size()-1,Map.of("role","user","content",userContent));
                 saved.turns=input;saved.turns.add(Map.of("role","assistant","content",response));saved.ids.add(message.getId());
                 history.save(key,saved);
-                if(generated==null)feedback.reply(response,responseCompleted);
+                if(generated==null)feedback.reply(response,responseCompleted,sent->{
+                    try {history.saveReply(key,sent.getId(),response);}
+                    catch(java.io.IOException error){FailureDiagnostics.log("REPLY_CONTEXT_SAVE",error,sent.getId());}
+                });
                 else {
-                    ThreadReplySender.send(message,generated,firstPost,roles,saved,()->history.save(key,saved));
+                    ThreadReplySender.send(message,generated,firstPost,roles,saved,()->history.save(key,saved),
+                            (id,body)->history.saveReply(key,id,body));
                     responseCompleted.run();
                 }
             }catch(AttachmentInput.Unavailable error){FailureDiagnostics.log("ATTACHMENT",error);feedback.reply(error.getMessage());}

@@ -73,6 +73,15 @@ class ThreadReplySenderTest {
         verify(post).addFiles(any(net.dv8tion.jda.api.utils.FileUpload.class));
     }
 
+    @Test void deliveredLongPostsSaveTheirFullBodyByDiscordId() throws Exception {
+        var history=new ChatHistory(directory);var saved=new ChatHistory.History();
+        ThreadReplySender.send(source,reply("長".repeat(8000),List.of()),1,roles,saved,()->{},
+                (id,body)->history.saveReply("123",id,body));
+        String body=new ChatHistory(directory).replyBody("123","345678901234567891");
+        assertTrue(body.startsWith("2：案内人 <@&456789012345678901>\n"));
+        assertTrue(body.endsWith("長".repeat(8000)));
+    }
+
     @Test void sendFailureKeepsOnlySuccessfulPostIdsAndStops() throws Exception {
         var sent=mock(Message.class);when(sent.getId()).thenReturn("345678901234567890");
         when(post.complete()).thenReturn(sent).thenThrow(new IllegalStateException());

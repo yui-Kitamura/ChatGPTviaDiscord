@@ -32,6 +32,30 @@ class AiConversationTest {
         when(h.message.reply(anyString())).thenReturn(h.reply);
         ServerModelContextTest.documents(h.guild);return h;
     }
+    @Test void discordReplyReachesProviderAndSentBodyIsSaved() throws Exception {
+        var transport=mock(OpenAiTransport.class);
+        when(transport.respond(anyString(),anyString(),anyString(),anyList(),any(OpenAiTransport.Progress.class))).thenReturn("answer");
+        try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)){
+            account(accounts);var h=event(USER,true,"new","これについて");
+            when(h.message.getType()).thenReturn(net.dv8tion.jda.api.entities.MessageType.INLINE_REPLY);
+            when(h.message.getChannelId()).thenReturn(ChannelControlsTest.CHANNEL);
+            var reference=mock(net.dv8tion.jda.api.entities.MessageReference.class);
+            when(reference.getMessageId()).thenReturn("old");when(reference.getChannelId()).thenReturn(ChannelControlsTest.CHANNEL);
+            when(h.message.getMessageReference()).thenReturn(reference);when(reference.resolve()).thenThrow(new IllegalStateException("deleted"));
+            var sent=mock(Message.class);when(sent.getId()).thenReturn("sent");var done=new CountDownLatch(1);
+            doAnswer(i->{i.<java.util.function.Consumer<Message>>getArgument(0).accept(sent);done.countDown();return null;}).when(h.reply).queue(any(),any());
+            var history=new ChatHistory(directory.resolve("history"));
+            try(var ai=new AiConversation(new AiAccess(directory,ROLE),h.controls,session,transport,new ResponseSettings(directory.resolve("response.properties")),history,"guide")){
+                ai.accept(h.messageEvent);assertTrue(done.await(5,TimeUnit.SECONDS));
+            }
+            verify(transport).respond(anyString(),anyString(),anyString(),argThat(turns->{
+                String content=turns.stream().filter(t->"user".equals(t.get("role"))).findFirst().orElseThrow().get("content").toString();
+                return content.startsWith("これについて\n")&&content.contains("\"message_id\":\"old\"")&&content.contains("unavailable");
+            }),any(OpenAiTransport.Progress.class));
+            String key=ChannelControlsTest.CHANNEL+"-"+UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            assertEquals("answer",new ChatHistory(directory.resolve("history")).replyBody(key,"sent"));
+        }
+    }
     void account(ChatGptAccounts accounts) throws Exception {
         var a=new ChatGptAccounts.Account();a.clientId="oaiapp_shared";a.subject="owner";a.accessToken="access";a.refreshToken="refresh";
         a.scope="chatgpt.tokens.use.direct";a.expiresAt=Instant.now().plusSeconds(3600).getEpochSecond();a.model="chosen";

@@ -12,9 +12,14 @@ import net.dv8tion.jda.api.utils.FileUpload;
 /** Sends in order so references can address posts from this very response. */
 final class ThreadReplySender {
     @FunctionalInterface interface Save { void run() throws IOException; }
+    @FunctionalInterface interface SaveReply { void run(String id,String body) throws IOException; }
 
     static void send(Message source, CharacterReply reply, long firstPost,
                      List<ResponseSettings.CharacterRole> roles, ChatHistory.History saved, Save save) throws IOException {
+        send(source,reply,firstPost,roles,saved,save,(id,body)->{});
+    }
+    static void send(Message source, CharacterReply reply, long firstPost,
+                     List<ResponseSettings.CharacterRole> roles, ChatHistory.History saved, Save save, SaveReply saveReply) throws IOException {
         source.reply("発言サマリ：" + reply.summary())
                 .mentionRepliedUser(false).setAllowedMentions(List.of()).setSuppressedNotifications(true)
                 .failOnInvalidReply(true).complete();
@@ -44,6 +49,7 @@ final class ThreadReplySender {
             Message sent=action.complete();
             saved.postMessages.put(number,sent.getId());
             save.run();
+            saveReply.run(sent.getId(),text.toString());
         }
     }
 }
