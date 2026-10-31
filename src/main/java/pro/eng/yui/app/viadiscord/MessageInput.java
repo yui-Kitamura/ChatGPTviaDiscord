@@ -26,6 +26,18 @@ record MessageInput(String text, List<Message.Attachment> attachments) {
         return new MessageInput(text.toString(), List.copyOf(attachments));
     }
 
+    static MessageInput combine(List<Message> messages) {
+        var text = new StringBuilder();
+        var attachments = new ArrayList<Message.Attachment>();
+        // Present the sender's note before the quoted material in either arrival order.
+        messages.stream().sorted(Comparator.comparing(m -> !m.getMessageSnapshots().isEmpty())).forEach(message -> {
+            var part = from(message);
+            append(text, part.text());
+            attachments.addAll(part.attachments());
+        });
+        return new MessageInput(text.toString(), List.copyOf(attachments));
+    }
+
     private static void append(StringBuilder text, String part) {
         if (part == null || part.isBlank()) return;
         if (!text.isEmpty()) text.append('\n');

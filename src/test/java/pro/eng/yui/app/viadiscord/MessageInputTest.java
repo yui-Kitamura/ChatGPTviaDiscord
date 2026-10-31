@@ -26,6 +26,17 @@ class MessageInputTest {
         assertEquals(List.of(first, second), result.attachments());
     }
 
+    @Test void pairKeepsNoteBeforeQuoteAndRetainsAllAttachmentsInBothOrders() {
+        var note=mock(Message.class);var forward=mock(Message.class);var attachment=mock(Message.Attachment.class);
+        when(note.getContentRaw()).thenReturn("依頼");when(forward.getContentRaw()).thenReturn("");
+        when(forward.getMessageSnapshots()).thenReturn(List.of(snapshot("資料",attachment)));
+        for(var messages:List.of(List.of(note,forward),List.of(forward,note))) {
+            var result=MessageInput.combine(messages);
+            assertEquals("依頼\n[転送メッセージ・引用資料]\n資料",result.text());
+            assertEquals(List.of(attachment),result.attachments());
+        }
+    }
+
     @Test void emptySnapshotDoesNotPretendToHaveReadableContent() {
         var message = mock(Message.class);
         when(message.getContentRaw()).thenReturn("");

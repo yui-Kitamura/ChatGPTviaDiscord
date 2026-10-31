@@ -41,7 +41,7 @@ class AiConversationTest {
         var calls=new AtomicInteger();var release=new CountDownLatch(1);var started=new CountDownLatch(1);
         var transport=new OpenAiTransport(Duration.ofSeconds(3)){
             @Override String respond(String token,String model,String instructions,List<Map<String,Object>> turns,OpenAiTransport.Progress progress) {
-                assertEquals(List.of(Map.of("role","user","content","question")),turns);
+                assertEquals(List.of(Map.of("role","user","content","question\n[転送メッセージ・引用資料]\n資料")),turns);
                 if(calls.incrementAndGet()==1)return "invalid";
                 started.countDown();try{assertTrue(release.await(5,TimeUnit.SECONDS));}catch(InterruptedException e){throw new AssertionError(e);}
                 return CharacterReplyTest.REPLY.replace("[4]","[]");
@@ -56,7 +56,12 @@ class AiConversationTest {
             doAnswer(i->{java.util.function.Consumer<Message> success=i.getArgument(0);success.accept(sent);shown.countDown();return null;}).when(h.reply).queue(any(),any());
             var gateway=new CharacterRoles.RoleGateway(){public boolean exists(String id){return true;}public String create(String name){return "456789012345678901";}};
             try(var ai=new AiConversation(new AiAccess(directory,ROLE),h.controls,session,transport,settings,history,"guide",guild->gateway)){
-                var listener=new GvdListener(h.controls,ai);listener.onMessageReceived(h.messageEvent);assertTrue(shown.await(5,TimeUnit.SECONDS));
+                var forwarded=event(USER,true,"forward","");
+                var timestamp=OffsetDateTime.now();when(h.message.getTimeCreated()).thenReturn(timestamp);
+                when(forwarded.message.getTimeCreated()).thenReturn(timestamp.plusNanos(100_000_000));
+                when(forwarded.message.getMessageSnapshots()).thenReturn(List.of(MessageInputTest.snapshot("資料")));
+                var listener=new GvdListener(h.controls,ai);listener.onMessageReceived(h.messageEvent);listener.onMessageReceived(forwarded.messageEvent);
+                assertTrue(shown.await(5,TimeUnit.SECONDS));
                 assertEquals(1,calls.get());assertTrue(settings.characters().isEmpty());assertFalse(java.nio.file.Files.exists(directory.resolve("history")));
                 var row=org.mockito.ArgumentCaptor.forClass(net.dv8tion.jda.api.components.MessageTopLevelComponent.class);
                 verify(h.reply).addComponents(row.capture());
@@ -88,7 +93,7 @@ class AiConversationTest {
                 release.countDown();assertTrue(finished.await(5,TimeUnit.SECONDS));
                 verify(channel).sendMessage(contains("1：案内人"));
                 String key=ChannelControlsTest.CHANNEL+"-"+UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                assertEquals(List.of("post"),history.load(key).ids);assertEquals(2,history.load(key).nextPost);
+                assertEquals(List.of("post","forward"),history.load(key).ids);assertEquals(2,history.load(key).nextPost);
                 when(click.getComponentId()).thenReturn(AiConversation.RETRY_PREFIX+"unknown");listener.onButtonInteraction(click);
                 verify(click,atLeastOnce()).reply(contains("期限切れ"));assertEquals(2,calls.get());
             }finally{release.countDown();}
@@ -152,6 +157,42 @@ class AiConversationTest {
                 assertEquals(List.of("+👀","+📨","-👀",ng?"+❌":"+⤵️","-📨"),stages);
                 delivery.get().accept(h.message);
                 assertEquals(ng?"-❌":"-⤵️",stages.getLast());
+            }
+        }
+    }
+
+    @Test void separateForwardAndNoteBecomeOneTurnAndBothIdsPreventReprocessing() throws Exception {
+        for(boolean forwardFirst:List.of(false,true)) {
+            var transport=mock(OpenAiTransport.class);
+            var request=new AtomicReference<List<Map<String,Object>>>();
+            when(transport.respond(anyString(),anyString(),anyString(),anyList(),any(OpenAiTransport.Progress.class)))
+                    .thenAnswer(i->{request.set(List.copyOf(i.getArgument(3)));return "answer";});
+            var path=directory.resolve("pair-"+forwardFirst);
+            try(var accounts=new ChatGptAccounts(path.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)) {
+                account(accounts);
+                var note=event(USER,true,"note-"+forwardFirst,"説明して");var forward=event(USER,true,"forward-"+forwardFirst,"");
+                var time=OffsetDateTime.now();when(note.message.getTimeCreated()).thenReturn(time);
+                when(forward.message.getTimeCreated()).thenReturn(time.plusNanos(100_000_000));
+                when(forward.message.getMessageSnapshots()).thenReturn(List.of(MessageInputTest.snapshot("資料")));
+                var history=new ChatHistory(path.resolve("history"));var done=new CountDownLatch(1);
+                doAnswer(i->{done.countDown();return null;}).when(note.reply).queue(any(),any());
+                try(var ai=new AiConversation(new AiAccess(directory,ROLE),note.controls,session,transport,
+                        new ResponseSettings(path.resolve("mode.properties")),history,"guide")) {
+                    ai.accept((forwardFirst?forward:note).messageEvent);ai.accept((forwardFirst?note:forward).messageEvent);
+                    assertTrue(done.await(5,TimeUnit.SECONDS));
+                    assertEquals(List.of(Map.of("role","user","content","説明して\n[転送メッセージ・引用資料]\n資料")),request.get());
+                    verify(forward.message,never()).reply(anyString());
+                    String key=ChannelControlsTest.CHANNEL+"-"+UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    var saved=history.load(key);assertTrue(saved.ids.containsAll(List.of(note.message.getId(),forward.message.getId())));
+                    assertEquals(2,saved.turns.size());
+                    ai.accept(forward.messageEvent);ai.switchMode(note.guild,note.messageEvent.getChannel(),ResponseMode.QA).get(5,TimeUnit.SECONDS);
+                }
+                try(var ai=new AiConversation(new AiAccess(directory,ROLE),forward.controls,session,transport,
+                        new ResponseSettings(path.resolve("mode.properties")),history,"guide")) {
+                    ai.accept(forward.messageEvent);
+                    ai.switchMode(forward.guild,forward.messageEvent.getChannel(),ResponseMode.QA).get(5,TimeUnit.SECONDS);
+                }
+                verify(transport,times(1)).respond(anyString(),anyString(),anyString(),anyList(),any(OpenAiTransport.Progress.class));
             }
         }
     }

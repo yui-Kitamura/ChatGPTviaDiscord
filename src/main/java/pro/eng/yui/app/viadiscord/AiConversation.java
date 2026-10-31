@@ -26,7 +26,7 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
     static final String RETRY_PREFIX="gvd:thread-retry:";
     private static final long RETRY_TTL_MILLIS=TimeUnit.MINUTES.toMillis(15);
     private final Map<String,RetryRequest> retries=new LinkedHashMap<>();
-    private record RetryRequest(MessageReceivedEvent original,String replyId,long expiresAt,AtomicBoolean claimed) {}
+    private record RetryRequest(List<MessageReceivedEvent> batch,MessageReceivedEvent original,String replyId,long expiresAt,AtomicBoolean claimed) {}
     private final ExecutorService worker=new ThreadPoolExecutor(1,1,0,TimeUnit.SECONDS,new ArrayBlockingQueue<>(16),Thread.ofVirtual().factory(),new ThreadPoolExecutor.AbortPolicy());
     AiConversation(AiAccess access,ChannelControls controls,ChatGptSession session,OpenAiTransport transport,ResponseSettings settings,ChatHistory history,String instructions) {
         this(access,controls,session,transport,settings,history,instructions,CharacterRoles::discord);
@@ -36,12 +36,17 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
         this.access=access;this.controls=controls;this.session=session;this.transport=transport;this.settings=settings;this.history=history;this.instructions=instructions;
         this.roleGateway=roleGateway;
     }
+    private final ForwardMessageBatcher batches=new ForwardMessageBatcher(this::acceptBatch);
     @Override public void accept(MessageReceivedEvent event) {
         if(!access.permits(event.getMember()))return;
+        batches.accept(event);
+    }
+    private void acceptBatch(List<MessageReceivedEvent> batch) {
+        var event=anchor(batch);
         var feedback=new MessageFeedback(event.getMessage(),feedbacks::remove);
         feedbacks.add(feedback);
         feedback.pickedUp();
-        try{worker.submit(()->process(event,feedback));}
+        try{worker.submit(()->process(batch,event,feedback,false));}
         catch(RejectedExecutionException e){
             FailureDiagnostics.log("AI_QUEUE",e,event.getMessage().getId());
             try(feedback){feedback.reply("処理待ちが多いため受け付けられませんでした。後で再投稿してください。",()->{});}
@@ -54,6 +59,7 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
     Future<String> switchMode(net.dv8tion.jda.api.entities.Guild guild,
                             net.dv8tion.jda.api.entities.channel.middleman.MessageChannel channel, ResponseMode mode, String requestedTitle) {
         // Serialize with ordinary replies so an in-flight response cannot restore old numbers.
+        batches.flush();
         String sourceId=FailureDiagnostics.sourceId();
         return worker.submit(() -> {
             try(var diagnostic=FailureDiagnostics.context(sourceId)) {
@@ -111,8 +117,10 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
     private static String historyKey(String channelId,ChatGptAccounts.Account account) {
         return channelId+"-"+UUID.nameUUIDFromBytes((account.clientId+":"+account.subject).getBytes(StandardCharsets.UTF_8));
     }
-    private void process(MessageReceivedEvent event,MessageFeedback feedback) {process(event,feedback,false);}
-    private void process(MessageReceivedEvent event,MessageFeedback feedback,boolean retry) {
+    private static MessageReceivedEvent anchor(List<MessageReceivedEvent> batch) {
+        return batch.stream().filter(e->e.getMessage().getMessageSnapshots().isEmpty()).findFirst().orElse(batch.getFirst());
+    }
+    private void process(List<MessageReceivedEvent> batch,MessageReceivedEvent event,MessageFeedback feedback,boolean retry) {
         try(var diagnostic=FailureDiagnostics.context(event.getMessage().getId());feedback) {
             Message message=event.getMessage();String user=event.getAuthor().getId();
             String parent=event.getChannelType().isThread()?event.getChannel().asThreadChannel().getParentChannel().getId():null;
@@ -121,12 +129,12 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
                 if(retry&&settings.mode(event.getChannel().getId())!=ResponseMode.THREAD)return;
                 var account=session.ready(event.getGuild().getId());
                 if(account.model.isEmpty())throw new ChatGptException("model_required",0);
-                var received=MessageInput.from(message);
+                var received=MessageInput.combine(batch.stream().map(MessageReceivedEvent::getMessage).toList());
                 String content=received.text();
                 if(content.isBlank()&&received.attachments().isEmpty()){feedback.reply("この投稿から読み取れる本文・添付を取得できませんでした。転送内容、または本文・添付を確認して再投稿してください。");return;}
                 if(content.length()>16000){feedback.reply("本文が長いため、分割して投稿してください。");return;}
                 String key=historyKey(event.getChannel().getId(),account);
-                var saved=history.load(key);if(saved.ids.contains(message.getId()))return;
+                var saved=history.load(key);if(batch.stream().anyMatch(e->saved.ids.contains(e.getMessage().getId())))return;
                 var input=new ArrayList<>(saved.turns);
                 String referencedHistory=ChannelHistoryContext.load(event.getGuild(),event.getMember(),message.getContentRaw());
                 Object userContent=AttachmentInput.content(content,received.attachments());
@@ -155,7 +163,7 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
                     try {generated=CharacterReply.parse(response,context,saved.nextPost);}
                     catch(java.io.IOException|IllegalArgumentException e) {
                         FailureDiagnostics.log("CHARACTER_PARSE",e);
-                        replyWithRetry(event,feedback);return;
+                        replyWithRetry(batch,event,feedback);return;
                     }
                     if(characterRoles==null)characterRoles=new CharacterRoles(settings,roleGateway.apply(event.getGuild()));
                     try {roles=characterRoles.ensureCharacters(generated.characters(),()->{
@@ -172,7 +180,7 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
                     saved.nextPost+=generated.posts().size();
                 }
                 input.set(input.size()-1,Map.of("role","user","content",userContent));
-                saved.turns=input;saved.turns.add(Map.of("role","assistant","content",response));saved.ids.add(message.getId());
+                saved.turns=input;saved.turns.add(Map.of("role","assistant","content",response));batch.forEach(e->saved.ids.add(e.getMessage().getId()));
                 history.save(key,saved);
                 if(generated==null)feedback.reply(response,responseCompleted);
                 else {
@@ -186,14 +194,14 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
             catch(Exception error){FailureDiagnostics.log("AI_PROCESS",error);feedback.reply("応答または会話の保存を完了できませんでした。時間を置いて再投稿してください。自動再試行はしていません。");}
         }
     }
-    private void replyWithRetry(MessageReceivedEvent event,MessageFeedback feedback) {
+    private void replyWithRetry(List<MessageReceivedEvent> batch,MessageReceivedEvent event,MessageFeedback feedback) {
         String id=RETRY_PREFIX+UUID.randomUUID();
         feedback.failed();
         feedback.reply("キャラ応答の形式を確認できなかったため、ロール作成・回答の確定は行っていません。自動再試行はしていません。\n投稿者は15分以内に「再送」を押すと、同じ依頼を再試行できます（Bot再起動後は無効）。",()->{},sent->{
             synchronized(retries){
                 retries.values().removeIf(r->r.expiresAt()<System.currentTimeMillis());
                 while(retries.size()>=128)retries.remove(retries.keySet().iterator().next());
-                retries.put(id,new RetryRequest(event,sent.getId(),System.currentTimeMillis()+RETRY_TTL_MILLIS,new AtomicBoolean()));
+                retries.put(id,new RetryRequest(batch,event,sent.getId(),System.currentTimeMillis()+RETRY_TTL_MILLIS,new AtomicBoolean()));
             }
         },ActionRow.of(Button.primary(id,"再送")));
     }
@@ -223,7 +231,7 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
                 var feedback=new MessageFeedback(original.getMessage(),feedbacks::remove);
                 feedbacks.add(feedback);feedback.pickedUp();
                 try {
-                    worker.execute(()->process(original,feedback,true));
+                    worker.execute(()->process(request.batch(),original,feedback,true));
                     synchronized(retries){retries.remove(id);}
                 }catch(RejectedExecutionException failure){
                     feedback.clear();
@@ -236,5 +244,5 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
         }catch(RuntimeException failure){request.claimed().set(false);}
     }
     private static void retryNotice(ButtonInteractionEvent event,String text){event.reply(text).setEphemeral(true).queue();}
-    @Override public void close(){worker.shutdownNow();feedbacks.forEach(MessageFeedback::clear);synchronized(retries){retries.clear();}}
+    @Override public void close(){batches.close();worker.shutdownNow();feedbacks.forEach(MessageFeedback::clear);synchronized(retries){retries.clear();}}
 }
