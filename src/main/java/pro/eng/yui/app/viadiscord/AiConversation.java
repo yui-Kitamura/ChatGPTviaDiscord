@@ -3,6 +3,10 @@ package pro.eng.yui.app.viadiscord;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+import net.dv8tion.jda.api.components.actionrow.ActionRow;
+import net.dv8tion.jda.api.components.buttons.Button;
+import net.dv8tion.jda.api.events.interaction.component.ButtonInteractionEvent;
 import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
 
@@ -19,6 +23,10 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
     private final Set<MessageFeedback> feedbacks=ConcurrentHashMap.newKeySet();
     private Runnable responseCompleted = () -> {};
     void onResponseCompleted(Runnable callback) { responseCompleted = java.util.Objects.requireNonNull(callback); }
+    static final String RETRY_PREFIX="gvd:thread-retry:";
+    private static final long RETRY_TTL_MILLIS=TimeUnit.MINUTES.toMillis(15);
+    private final Map<String,RetryRequest> retries=new LinkedHashMap<>();
+    private record RetryRequest(MessageReceivedEvent original,String replyId,long expiresAt,AtomicBoolean claimed) {}
     private final ExecutorService worker=new ThreadPoolExecutor(1,1,0,TimeUnit.SECONDS,new ArrayBlockingQueue<>(16),Thread.ofVirtual().factory(),new ThreadPoolExecutor.AbortPolicy());
     AiConversation(AiAccess access,ChannelControls controls,ChatGptSession session,OpenAiTransport transport,ResponseSettings settings,ChatHistory history,String instructions) {
         this(access,controls,session,transport,settings,history,instructions,CharacterRoles::discord);
@@ -103,12 +111,14 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
     private static String historyKey(String channelId,ChatGptAccounts.Account account) {
         return channelId+"-"+UUID.nameUUIDFromBytes((account.clientId+":"+account.subject).getBytes(StandardCharsets.UTF_8));
     }
-    private void process(MessageReceivedEvent event,MessageFeedback feedback) {
+    private void process(MessageReceivedEvent event,MessageFeedback feedback) {process(event,feedback,false);}
+    private void process(MessageReceivedEvent event,MessageFeedback feedback,boolean retry) {
         try(var diagnostic=FailureDiagnostics.context(event.getMessage().getId());feedback) {
             Message message=event.getMessage();String user=event.getAuthor().getId();
             String parent=event.getChannelType().isThread()?event.getChannel().asThreadChannel().getParentChannel().getId():null;
             if(!access.permits(event.getGuild().getMemberById(user))||!controls.shouldRespond(event.getGuild().getId(),event.getChannel().getId(),parent,false,false,message.getType()))return;
             try {
+                if(retry&&settings.mode(event.getChannel().getId())!=ResponseMode.THREAD)return;
                 var account=session.ready(event.getGuild().getId());
                 if(account.model.isEmpty())throw new ChatGptException("model_required",0);
                 var received=MessageInput.from(message);
@@ -145,7 +155,7 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
                     try {generated=CharacterReply.parse(response,context,saved.nextPost);}
                     catch(java.io.IOException|IllegalArgumentException e) {
                         FailureDiagnostics.log("CHARACTER_PARSE",e);
-                        feedback.reply("キャラ応答の形式を確認できなかったため、ロール作成・回答の確定は行っていません。自動再試行はしていません。");return;
+                        replyWithRetry(event,feedback);return;
                     }
                     if(characterRoles==null)characterRoles=new CharacterRoles(settings,roleGateway.apply(event.getGuild()));
                     try {roles=characterRoles.ensureCharacters(generated.characters(),()->{
@@ -176,5 +186,55 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
             catch(Exception error){FailureDiagnostics.log("AI_PROCESS",error);feedback.reply("応答または会話の保存を完了できませんでした。時間を置いて再投稿してください。自動再試行はしていません。");}
         }
     }
-    @Override public void close(){worker.shutdownNow();feedbacks.forEach(MessageFeedback::clear);}
+    private void replyWithRetry(MessageReceivedEvent event,MessageFeedback feedback) {
+        String id=RETRY_PREFIX+UUID.randomUUID();
+        feedback.failed();
+        feedback.reply("キャラ応答の形式を確認できなかったため、ロール作成・回答の確定は行っていません。自動再試行はしていません。\n投稿者は15分以内に「再送」を押すと、同じ依頼を再試行できます（Bot再起動後は無効）。",()->{},sent->{
+            synchronized(retries){
+                retries.values().removeIf(r->r.expiresAt()<System.currentTimeMillis());
+                while(retries.size()>=128)retries.remove(retries.keySet().iterator().next());
+                retries.put(id,new RetryRequest(event,sent.getId(),System.currentTimeMillis()+RETRY_TTL_MILLIS,new AtomicBoolean()));
+            }
+        },ActionRow.of(Button.primary(id,"再送")));
+    }
+    void retry(ButtonInteractionEvent event) {
+        String id=event.getComponentId();
+        if(!id.startsWith(RETRY_PREFIX))return;
+        RetryRequest request;
+        synchronized(retries){
+            retries.values().removeIf(r->r.expiresAt()<System.currentTimeMillis());
+            request=retries.get(id);
+        }
+        if(request==null){retryNotice(event,"再送ボタンは期限切れ、受付済み、またはBot再起動により無効です。元の依頼を再投稿してください。");return;}
+        var original=request.original();
+        if(!event.isFromGuild()||!event.getGuild().getId().equals(original.getGuild().getId())
+                ||!event.getChannel().getId().equals(original.getChannel().getId())||!event.getMessageId().equals(request.replyId())
+                ||!event.getUser().getId().equals(original.getAuthor().getId())||!access.permits(event.getMember())) {
+            retryNotice(event,"この再送ボタンは、利用権限のある元の投稿者だけが使えます。");return;
+        }
+        String parent=original.getChannelType().isThread()?original.getChannel().asThreadChannel().getParentChannel().getId():null;
+        if(settings.mode(original.getChannel().getId())!=ResponseMode.THREAD
+                ||!controls.shouldRespond(original.getGuild().getId(),original.getChannel().getId(),parent,false,false,original.getMessage().getType())) {
+            retryNotice(event,"現在のモードまたはチャンネル設定では再送できません。");return;
+        }
+        if(!request.claimed().compareAndSet(false,true)){retryNotice(event,"この依頼は再送を受け付けています。");return;}
+        try {
+            event.deferReply(true).queue(hook->{
+                var feedback=new MessageFeedback(original.getMessage(),feedbacks::remove);
+                feedbacks.add(feedback);feedback.pickedUp();
+                try {
+                    worker.execute(()->process(original,feedback,true));
+                    synchronized(retries){retries.remove(id);}
+                }catch(RejectedExecutionException failure){
+                    feedback.clear();
+                    request.claimed().set(false);
+                    hook.editOriginal("処理待ちが多いため受け付けられませんでした。後で同じ再送ボタンを押してください。").queue();return;
+                }
+                hook.editOriginal("再送を受け付けました。結果は元の投稿への返信でお知らせします。").queue();
+                event.getMessage().editMessageComponents(List.of()).queue(ignored->{},failure->{});
+            },failure->request.claimed().set(false));
+        }catch(RuntimeException failure){request.claimed().set(false);}
+    }
+    private static void retryNotice(ButtonInteractionEvent event,String text){event.reply(text).setEphemeral(true).queue();}
+    @Override public void close(){worker.shutdownNow();feedbacks.forEach(MessageFeedback::clear);synchronized(retries){retries.clear();}}
 }

@@ -9,6 +9,13 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 import net.dv8tion.jda.api.entities.Message;
+import net.dv8tion.jda.api.events.interaction.component.ButtonInteractionEvent;
+import net.dv8tion.jda.api.interactions.InteractionHook;
+import net.dv8tion.jda.api.requests.restaction.MessageEditAction;
+import net.dv8tion.jda.api.requests.restaction.WebhookMessageEditAction;
+import net.dv8tion.jda.api.requests.restaction.interactions.ReplyCallbackAction;
+import net.dv8tion.jda.api.components.actionrow.ActionRow;
+import net.dv8tion.jda.api.components.buttons.Button;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -29,6 +36,63 @@ class AiConversationTest {
         var a=new ChatGptAccounts.Account();a.clientId="oaiapp_shared";a.subject="owner";a.accessToken="access";a.refreshToken="refresh";
         a.scope="chatgpt.tokens.use.direct";a.expiresAt=Instant.now().plusSeconds(3600).getEpochSecond();a.model="chosen";
         accounts.put(ChatGptAccounts.key(ChannelControlsTest.GUILD,"default"),a,true);
+    }
+    @Test @SuppressWarnings("unchecked") void malformedThreadReplyCanBeRetriedOnceByItsAuthorizedAuthor() throws Exception {
+        var calls=new AtomicInteger();var release=new CountDownLatch(1);var started=new CountDownLatch(1);
+        var transport=new OpenAiTransport(Duration.ofSeconds(3)){
+            @Override String respond(String token,String model,String instructions,List<Map<String,Object>> turns,OpenAiTransport.Progress progress) {
+                assertEquals(List.of(Map.of("role","user","content","question")),turns);
+                if(calls.incrementAndGet()==1)return "invalid";
+                started.countDown();try{assertTrue(release.await(5,TimeUnit.SECONDS));}catch(InterruptedException e){throw new AssertionError(e);}
+                return CharacterReplyTest.REPLY.replace("[4]","[]");
+            }
+        };
+        try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)){
+            account(accounts);var h=event(USER,true,"post","question");var settings=new ResponseSettings(directory.resolve("response.properties"));
+            settings.setMode(ChannelControlsTest.CHANNEL,ResponseMode.THREAD);
+            var history=new ChatHistory(directory.resolve("history"));var sent=mock(Message.class);when(sent.getId()).thenReturn("error-reply");
+            var clear=mock(MessageEditAction.class,RETURNS_SELF);when(sent.editMessageComponents(anyCollection())).thenReturn(clear);
+            var shown=new CountDownLatch(1);
+            doAnswer(i->{java.util.function.Consumer<Message> success=i.getArgument(0);success.accept(sent);shown.countDown();return null;}).when(h.reply).queue(any(),any());
+            var gateway=new CharacterRoles.RoleGateway(){public boolean exists(String id){return true;}public String create(String name){return "456789012345678901";}};
+            try(var ai=new AiConversation(new AiAccess(directory,ROLE),h.controls,session,transport,settings,history,"guide",guild->gateway)){
+                var listener=new GvdListener(h.controls,ai);listener.onMessageReceived(h.messageEvent);assertTrue(shown.await(5,TimeUnit.SECONDS));
+                assertEquals(1,calls.get());assertTrue(settings.characters().isEmpty());assertFalse(java.nio.file.Files.exists(directory.resolve("history")));
+                var row=org.mockito.ArgumentCaptor.forClass(net.dv8tion.jda.api.components.MessageTopLevelComponent.class);
+                verify(h.reply).addComponents(row.capture());
+                var button=(Button)((ActionRow)row.getValue()).getComponents().getFirst();assertEquals("再送",button.getLabel());
+                var click=mock(ButtonInteractionEvent.class);when(click.getComponentId()).thenReturn(button.getCustomId());
+                var channel=h.messageEvent.getChannel();var member=h.messageEvent.getMember();var revoked=AiAccessTest.member(false);
+                when(click.isFromGuild()).thenReturn(true);when(click.getGuild()).thenReturn(h.guild);when(click.getChannel()).thenReturn(channel);
+                when(click.getMessageId()).thenReturn("error-reply");when(click.getMessage()).thenReturn(sent);when(click.getUser()).thenReturn(h.user);when(click.getMember()).thenReturn(member);
+                var notice=mock(ReplyCallbackAction.class,RETURNS_SELF);when(click.reply(anyString())).thenReturn(notice);
+                // Other users, revoked access, changed mode, skipped channels and mismatched messages cannot consume the retry.
+                var other=mock(net.dv8tion.jda.api.entities.User.class);when(other.getId()).thenReturn("other");when(click.getUser()).thenReturn(other);listener.onButtonInteraction(click);when(click.getUser()).thenReturn(h.user);
+                when(click.getMember()).thenReturn(revoked);listener.onButtonInteraction(click);when(click.getMember()).thenReturn(member);
+                settings.setMode(ChannelControlsTest.CHANNEL,ResponseMode.QA);listener.onButtonInteraction(click);settings.setMode(ChannelControlsTest.CHANNEL,ResponseMode.THREAD);
+                h.controls.update(ChannelControlsTest.GUILD,"skipch",ChannelControlsTest.CHANNEL);listener.onButtonInteraction(click);h.controls.update(ChannelControlsTest.GUILD,"readch",ChannelControlsTest.CHANNEL);
+                when(click.getMessageId()).thenReturn("other-reply");listener.onButtonInteraction(click);when(click.getMessageId()).thenReturn("error-reply");
+                verify(click,never()).deferReply(anyBoolean());assertEquals(1,calls.get());
+                var deferred=mock(ReplyCallbackAction.class);when(click.deferReply(true)).thenReturn(deferred);
+                var hook=mock(InteractionHook.class);var edit=mock(WebhookMessageEditAction.class,RETURNS_SELF);when(hook.editOriginal(anyString())).thenReturn(edit);
+                // An acknowledgement failure leaves the same button usable.
+                doAnswer(i->{java.util.function.Consumer<Throwable> failure=i.getArgument(1);failure.accept(new IllegalStateException());return null;}).when(deferred).queue(any(),any());
+                listener.onButtonInteraction(click);assertEquals(1,calls.get());
+                doAnswer(i->{java.util.function.Consumer<InteractionHook> success=i.getArgument(0);success.accept(hook);return null;}).when(deferred).queue(any(),any());
+                var finished=new CountDownLatch(1);ai.onResponseCompleted(finished::countDown);
+                var postAction=mock(net.dv8tion.jda.api.requests.restaction.MessageCreateAction.class,RETURNS_SELF);
+                when(channel.sendMessage(anyString())).thenReturn(postAction);when(postAction.complete()).thenReturn(sent);
+                when(h.message.getChannel()).thenReturn(channel);when(h.message.getGuild()).thenReturn(h.guild);
+                listener.onButtonInteraction(click);assertTrue(started.await(5,TimeUnit.SECONDS));listener.onButtonInteraction(click);
+                assertEquals(2,calls.get());verify(sent).editMessageComponents(anyCollection());
+                release.countDown();assertTrue(finished.await(5,TimeUnit.SECONDS));
+                verify(channel).sendMessage(contains("1：案内人"));
+                String key=ChannelControlsTest.CHANNEL+"-"+UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                assertEquals(List.of("post"),history.load(key).ids);assertEquals(2,history.load(key).nextPost);
+                when(click.getComponentId()).thenReturn(AiConversation.RETRY_PREFIX+"unknown");listener.onButtonInteraction(click);
+                verify(click,atLeastOnce()).reply(contains("期限切れ"));assertEquals(2,calls.get());
+            }finally{release.countDown();}
+        }
     }
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})

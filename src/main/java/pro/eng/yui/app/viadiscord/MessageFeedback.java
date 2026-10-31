@@ -57,13 +57,18 @@ final class MessageFeedback implements OpenAiTransport.Progress, AutoCloseable {
     }
     void reply(String text) {FailureDiagnostics.log("AI_ERROR_REPLY",null,message.getId());failed();reply(text,()->{});}
     void reply(String text,Runnable completed) {
+        reply(text,completed,ignored->{});
+    }
+    void reply(String text,Runnable completed,java.util.function.Consumer<Message> delivered,
+               net.dv8tion.jda.api.components.MessageTopLevelComponent... components) {
         var action=message.reply(text.length()<=1900?text:"回答を添付しました。")
                 .mentionRepliedUser(false).setAllowedMentions(List.of())
                 .setSuppressedNotifications(true).failOnInvalidReply(true);
         if(text.length()>1900)action.addFiles(FileUpload.fromData(text.getBytes(StandardCharsets.UTF_8),"response.txt"));
+        if(components.length>0)action.addComponents(components);
         deferred=true;
         try {
-            action.queue(ignored->{try {completed.run();} finally {clear();}},failure->{
+            action.queue(sent->{try {delivered.accept(sent);completed.run();} finally {clear();}},failure->{
                 FailureDiagnostics.log("AI_SEND",failure,message.getId());
                 clear();
             });
