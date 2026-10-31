@@ -9,6 +9,7 @@ import java.util.*;
 import java.util.concurrent.atomic.*;
 import org.junit.jupiter.api.Test;
 
+@org.junit.jupiter.api.extension.ExtendWith(AttachmentHttpFixture.class)
 class OpenAiTransportTest {
     OpenAiTransport transport(HttpServer server){var uri=URI.create("http://127.0.0.1:"+server.getAddress().getPort()+"/");return new OpenAiTransport(Duration.ofSeconds(2),uri.resolve("token"),uri.resolve("jwks"),uri,uri.resolve("revoke"));}
     @Test void streamsTextAndRequiresCompletedWithSupportedFieldsOnly() throws Exception {

@@ -166,6 +166,9 @@ class ChannelHistoryContextTest {
         assertThrows(ChannelHistoryContext.Unavailable.class, () -> ChannelHistoryContext.load(guild, requester, "<#"+ID+">"));
         when(request.complete()).thenThrow(new IllegalStateException("secret upstream body"));
         var error = assertThrows(ChannelHistoryContext.Unavailable.class, () -> ChannelHistoryContext.load(guild, requester, "<#"+ID+">"));
+        assertNotNull(error.getCause());
+        assertEquals(FailureDiagnostics.Reason.FETCH_FAILED,error.details().reason());
+        assertFalse(FailureDiagnosticsTest.capture(()->FailureDiagnostics.log("CHANNEL_HISTORY",error)).contains("secret"));
         assertFalse(error.getMessage().contains("secret"));
     }
 

@@ -81,7 +81,12 @@ class ServerModelContextTest {
         assertThrows(ServerModelContext.Unavailable.class, () -> ServerModelContext.load(guild));
         var request = document(guild, name, message("guidance"));
         when(request.complete()).thenThrow(new IllegalStateException("private error body"));
-        assertFalse(assertThrows(ServerModelContext.Unavailable.class, () -> ServerModelContext.load(guild)).getMessage().contains("private error body"));
+        var failure=assertThrows(ServerModelContext.Unavailable.class, () -> ServerModelContext.load(guild));
+        assertFalse(failure.getMessage().contains("private error body"));
+        assertEquals(FailureDiagnostics.Reason.FETCH_FAILED,failure.details().reason());
+        assertNotNull(failure.getCause());
+        String log=FailureDiagnosticsTest.capture(()->FailureDiagnostics.log("SERVER_DOCUMENT",failure));
+        assertTrue(log.contains("reason=FETCH_FAILED target="+name));assertFalse(log.contains("private error body"));
     }
 
     @Test void paginatesPastOneHundredPostsAndRejectsMoreThanFiveHundred() throws Exception {

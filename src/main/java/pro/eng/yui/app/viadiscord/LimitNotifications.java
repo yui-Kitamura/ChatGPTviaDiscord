@@ -53,7 +53,8 @@ final class LimitNotifications extends ListenerAdapter implements AutoCloseable 
         var guild = jda.getGuildById(guildId);
         var channel = guild == null ? null : guild.getTextChannelById(config.channelId());
         if (channel == null) throw new IllegalStateException("Configured limit channel is unavailable in the target guild.");
-        String text = query.get();
+        String text;
+        try(var diagnostic=FailureDiagnostics.context(config.channelId())){text=query.get();}
         synchronized (this) {
             if (closed) return CompletableFuture.completedFuture(null);
             return channel.sendMessage(text).setAllowedMentions(List.of())
@@ -94,7 +95,7 @@ final class LimitNotifications extends ListenerAdapter implements AutoCloseable 
         } else {
             retryAfter = now + RETRY_DELAY;
             retrying = true;
-            System.err.println("LIMIT_NOTIFICATION_FAILED error_type=" + error.getClass().getSimpleName());
+            FailureDiagnostics.log("LIMIT_NOTIFICATION",error,config==null?"":config.channelId());
         }
     }
 

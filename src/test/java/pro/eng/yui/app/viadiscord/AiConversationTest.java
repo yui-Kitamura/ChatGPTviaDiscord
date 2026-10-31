@@ -448,6 +448,29 @@ class AiConversationTest {
             }
         }
     }
+    @Test void attachmentFailureLogsSourceAndSizesBeforeReplyWithoutCallingAi() throws Exception {
+        var transport=mock(OpenAiTransport.class);
+        var h=event(USER,true,"1566000639157473370","");
+        var image=AttachmentInputTest.attachment("private-photo.jpg","image/jpeg",new byte[]{1,2,3});
+        when(image.getSize()).thenReturn(4);when(h.message.getAttachments()).thenReturn(List.of(image));
+        var delivered=new CountDownLatch(1);
+        doAnswer(i->{delivered.countDown();return null;}).when(h.reply).queue(any(),any());
+        try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)) {
+            account(accounts);
+            try(var ai=new AiConversation(new AiAccess(directory,ROLE),h.controls,session,transport,
+                    new ResponseSettings(directory.resolve("response.properties")),new ChatHistory(directory.resolve("history")),"guide")) {
+                String log=FailureDiagnosticsTest.capture(()->{
+                    ai.accept(h.messageEvent);
+                    try{assertTrue(delivered.await(5,TimeUnit.SECONDS));}
+                    catch(InterruptedException e){throw new AssertionError(e);}
+                });
+                assertTrue(log.contains("operation=ATTACHMENT source_id=1566000639157473370 reason=SIZE_MISMATCH"));
+                assertTrue(log.contains("declared_bytes=4 actual_bytes=3"));assertFalse(log.contains("private-photo"));
+                verify(h.message).reply(contains("添付ファイルを取得できません"));
+                verifyNoInteractions(transport);
+            }
+        }
+    }
     @Test void qaAttachmentOnlyPostReachesProviderAndDownloadFailureDoesNot() throws Exception {
         var transport=mock(OpenAiTransport.class);
         when(transport.respond(anyString(),anyString(),anyString(),anyList(),any(OpenAiTransport.Progress.class))).thenReturn("answer");

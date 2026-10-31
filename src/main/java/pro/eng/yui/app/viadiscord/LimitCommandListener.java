@@ -1,6 +1,5 @@
 package pro.eng.yui.app.viadiscord;
 
-import java.util.List;
 import java.util.concurrent.*;
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
 import net.dv8tion.jda.api.events.session.ShutdownEvent;
@@ -35,9 +34,9 @@ final class LimitCommandListener extends ListenerAdapter {
             return;
         }
         event.deferReply(false).queue(hook -> {
-            try { worker.submit(() -> say(hook, query())); }
-            catch (RejectedExecutionException e) { say(hook, "照会が混み合っています。後で /gvd limit を再実行してください。"); }
-        }, error -> System.err.println("LIMIT_REPLY_FAILED: Discord interaction response could not be delivered."));
+            try { worker.submit(() -> {try(var diagnostic=FailureDiagnostics.context(event.getId())){say(hook, query());}}); }
+            catch (RejectedExecutionException e) { FailureDiagnostics.log("LIMIT_QUEUE",e,event.getId());say(hook, "照会が混み合っています。後で /gvd limit を再実行してください。"); }
+        }, error -> FailureDiagnostics.log("LIMIT_ACK",error,event.getId()));
     }
 
     static boolean handles(String command, String subcommand) {
@@ -61,16 +60,16 @@ final class LimitCommandListener extends ListenerAdapter {
                         + "https://chatgpt.com/settings/usage\nこの照会は AI の回答生成を行いません。";
             }
         } catch (ChatGptException e) {
-            e.log();
+            e.log();FailureDiagnostics.log("LIMIT_QUERY",e);
             return "利用枠の照会を完了できませんでした。\n" + e.userMessage();
         } catch (Exception e) {
+            FailureDiagnostics.log("LIMIT_QUERY",e);
             return "利用枠の照会を完了できませんでした。時間を置いて再実行してください。自動再試行はしていません。";
         }
     }
 
     private static void say(InteractionHook hook, String text) {
-        hook.editOriginal(text).setAllowedMentions(List.of()).queue(ignored -> {},
-                error -> System.err.println("LIMIT_REPLY_FAILED: Discord interaction response could not be delivered."));
+        FailureDiagnostics.edit(hook,text,"LIMIT_REPLY");
     }
 
     @Override public void onShutdown(ShutdownEvent event) { worker.shutdownNow(); }
