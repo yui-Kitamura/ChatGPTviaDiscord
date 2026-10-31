@@ -84,7 +84,7 @@ class OpenAiTransport {
         catch(IOException | RuntimeException failure) {progress.failed();throw failure;}
     }
     private String respondStream(String token,String model,String instructions,List<Map<String,Object>> history,Progress progress) throws IOException {
-        String payload=ChatGptAccounts.JSON.writeValueAsString(Map.of("model",model,"instructions",instructions,"input",history,"store",false,"stream",true));
+        String payload=ChatGptAccounts.JSON.writeValueAsString(Map.of("model",model,"instructions",instructions,"input",ChatTimestamps.input(history),"store",false,"stream",true));
         var request=authorized(api.resolve("responses"),token).timeout(timeout).header("Content-Type","application/json").header("Accept","text/event-stream")
                 .POST(publishing(payload,progress)).build();
         HttpResponse<InputStream> response;

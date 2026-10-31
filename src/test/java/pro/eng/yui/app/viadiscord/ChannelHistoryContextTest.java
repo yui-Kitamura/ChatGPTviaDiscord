@@ -42,7 +42,7 @@ class ChannelHistoryContextTest {
         when(author.isBot()).thenReturn(isBot);
         when(message.getAuthor()).thenReturn(author);
         when(message.getId()).thenReturn(id);
-        when(message.getTimeCreated()).thenReturn(OffsetDateTime.parse("2026-10-30T08:00:00+09:00"));
+        when(message.getTimeCreated()).thenReturn(OffsetDateTime.parse("2026-10-29T23:00:00Z"));
         when(message.getAttachments()).thenReturn(List.of());
         return message;
     }
@@ -53,7 +53,7 @@ class ChannelHistoryContextTest {
         assertTrue(result.indexOf("相談内容") < result.indexOf("決まったこと"));
         assertTrue(result.contains("user_id=user, bot=false"));
         assertTrue(result.contains("user_id=bot, bot=true"));
-        assertTrue(result.contains("2026-10-30T08:00+09:00"));
+        assertTrue(result.contains("2026-10-30 08:00:00 +09:00 JST"));
         assertTrue(result.contains("https://discord.com/channels/guild/"+ID+"/1"));
         assertTrue(result.contains("取得投稿数: 2"));
         verify(request, times(1)).complete();

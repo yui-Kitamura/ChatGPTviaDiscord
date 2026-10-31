@@ -63,7 +63,7 @@ final class ChannelHistoryContext {
                     String body = received.text();
                     if (body.isBlank() && received.attachments().isEmpty()) continue;
                     if (!received.attachments().isEmpty()) body += "\n[添付あり・本文未取得]";
-                    String record = "[" + message.getTimeCreated() + "] " + message.getAuthor().getName()
+                    String record = "[" + ChatTimestamps.format(message.getTimeCreated()) + "] " + message.getAuthor().getName()
                             + " (user_id=" + message.getAuthor().getId() + ", bot=" + message.getAuthor().isBot() + ") "
                             + "https://discord.com/channels/" + guild.getId() + "/" + id + "/" + message.getId()
                             + "\n" + body + "\n";
