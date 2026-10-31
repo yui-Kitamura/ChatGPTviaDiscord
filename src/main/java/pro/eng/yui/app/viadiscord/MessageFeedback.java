@@ -39,7 +39,7 @@ final class MessageFeedback implements OpenAiTransport.Progress, AutoCloseable {
             try {return operation.get().submit();}
             catch(RuntimeException failure) {return CompletableFuture.<Void>failedFuture(failure);}
         }).handle((ignored,failure)->{
-            if(failure!=null)System.err.println("GVD_PROGRESS_REACTION_FAILED");
+            if(failure!=null)FailureDiagnostics.log("PROGRESS_REACTION",failure,message.getId());
             return null;
         });
     }
@@ -55,7 +55,7 @@ final class MessageFeedback implements OpenAiTransport.Progress, AutoCloseable {
         }
         return pending;
     }
-    void reply(String text) {failed();reply(text,()->{});}
+    void reply(String text) {FailureDiagnostics.log("AI_ERROR_REPLY",null,message.getId());failed();reply(text,()->{});}
     void reply(String text,Runnable completed) {
         var action=message.reply(text.length()<=1900?text:"回答を添付しました。")
                 .mentionRepliedUser(false).setAllowedMentions(List.of())
@@ -64,10 +64,10 @@ final class MessageFeedback implements OpenAiTransport.Progress, AutoCloseable {
         deferred=true;
         try {
             action.queue(ignored->{try {completed.run();} finally {clear();}},failure->{
-                System.err.println("GVD_AI_SEND_FAILED error_type="+failure.getClass().getSimpleName());
+                FailureDiagnostics.log("AI_SEND",failure,message.getId());
                 clear();
             });
-        } catch(RuntimeException failure) {deferred=false;throw failure;}
+        } catch(RuntimeException failure) {FailureDiagnostics.log("AI_SEND",failure,message.getId());deferred=false;throw failure;}
     }
     @Override public void close() {if(!deferred)clear();}
 }

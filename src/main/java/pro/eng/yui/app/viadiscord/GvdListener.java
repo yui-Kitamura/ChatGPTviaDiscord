@@ -39,10 +39,10 @@ final class GvdListener extends ListenerAdapter {
         feedback.pickedUp();
         try {
             quietReply(message).queue(ignored -> feedback.clear(), failure -> {
-                logFailure("REPLY", failure);feedback.clear();
+                FailureDiagnostics.log("REPLY",failure,message.getId());feedback.clear();
             });
         } catch (RuntimeException failure) {
-            logFailure("REPLY", failure);feedback.clear();
+            FailureDiagnostics.log("REPLY",failure,message.getId());feedback.clear();
         }
     }
 
@@ -78,37 +78,34 @@ final class GvdListener extends ListenerAdapter {
             try {
                 controls.update(event.getGuild().getId(), subcommand, channel.getId());
             } catch (IOException failure) {
-                logFailure("SETTINGS_SAVE", failure);
+                FailureDiagnostics.log("SETTINGS_SAVE",failure,event.getId());
                 hook.editOriginal("保存できなかったため、設定は変更していません。")
-                        .queue(ignored -> {}, error -> logFailure("COMMAND_REPLY", error));
+                        .queue(ignored -> {}, error -> FailureDiagnostics.log("COMMAND_REPLY",error,event.getId()));
                 return;
             }
             var logChannel = event.getGuild().getSystemChannel();
             if (logChannel == null) {
+                FailureDiagnostics.log("COMMAND_LOG_CHANNEL_MISSING",null,event.getId());
                 hook.editOriginal("設定を変更しましたが、サーバーのデフォルトログチャンネルが未設定のため結果を投稿できませんでした。")
-                        .queue(ignored -> {}, failure -> logFailure("COMMAND_REPLY", failure));
+                        .queue(ignored -> {}, failure -> FailureDiagnostics.log("COMMAND_REPLY",failure,event.getId()));
                 return;
             }
             String response = channel.getAsMention() + ("readch".equals(subcommand) ? " ではROMりません" : " ではROMります");
             try {
                 logChannel.sendMessage(response).setAllowedMentions(List.of()).queue(
                         ignored -> hook.editOriginal("デフォルトログチャンネルに結果を投稿しました。")
-                                .queue(done -> {}, failure -> logFailure("COMMAND_REPLY", failure)),
+                                .queue(done -> {}, failure -> FailureDiagnostics.log("COMMAND_REPLY",failure,event.getId())),
                         failure -> reportLogFailure(hook, failure));
             } catch (RuntimeException failure) {
                 reportLogFailure(hook, failure);
             }
-        }, failure -> logFailure("COMMAND_ACK", failure));
+        }, failure -> FailureDiagnostics.log("COMMAND_ACK",failure,event.getId()));
     }
 
     private static void reportLogFailure(net.dv8tion.jda.api.interactions.InteractionHook hook, Throwable failure) {
-        logFailure("COMMAND_LOG", failure);
+        FailureDiagnostics.delivery("COMMAND_LOG",hook,failure);
         hook.editOriginal("設定を変更しましたが、デフォルトログチャンネルへの結果の投稿に失敗しました。")
-                .queue(ignored -> {}, error -> logFailure("COMMAND_REPLY", error));
+                .queue(ignored -> {}, error -> FailureDiagnostics.delivery("COMMAND_REPLY",hook,error));
     }
 
-    private static void logFailure(String operation, Throwable failure) {
-        // Exception messages can contain external payloads. Never log message text or credentials.
-        System.err.printf("GVD_%s_FAILED error_type=%s%n", operation, failure.getClass().getSimpleName());
-    }
 }

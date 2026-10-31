@@ -52,7 +52,7 @@ class OpenAiTransport {
     synchronized JWKSet keys(String kid) throws IOException {
         if(keys==null||keys.getKeyByKeyId(kid)==null||keysAt.plusSeconds(3600).isBefore(Instant.now())) {
             try { keys=JWKSet.parse(json(HttpRequest.newBuilder(jwksEndpoint).timeout(Duration.ofSeconds(20)).GET().build()).toString());keysAt=Instant.now(); }
-            catch(java.text.ParseException e){throw new IOException("Invalid OpenAI signing keys.");}
+            catch(java.text.ParseException e){throw new IOException("Invalid OpenAI signing keys.",e);}
         }
         return keys;
     }
@@ -148,7 +148,7 @@ class OpenAiTransport {
                 var failure=failure(error,response.statusCode());failure.requestId=requestId(response);throw failure;
             }
             return response;
-        } catch(InterruptedException e){Thread.currentThread().interrupt();throw new IOException("ChatGPT request interrupted.");}
+        } catch(InterruptedException e){Thread.currentThread().interrupt();throw new IOException("ChatGPT request interrupted.",e);}
     }
     private JsonNode json(HttpRequest request) throws IOException {
         try(var body=send(request).body()){

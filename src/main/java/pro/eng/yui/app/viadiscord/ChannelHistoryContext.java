@@ -12,8 +12,12 @@ final class ChannelHistoryContext {
     private static final Pattern MENTION = Pattern.compile("<#([0-9]{17,20})>");
     private static final int MAX_MESSAGES = 5_000, MAX_CHARACTERS = 128_000, MAX_TOTAL_CHARACTERS = 256_000;
 
-    static final class Unavailable extends Exception {
-        Unavailable(String reason) { super(reason); }
+    static final class Unavailable extends Exception implements FailureDiagnostics.Classified {
+        private final FailureDiagnostics.Details details;
+        Unavailable(String message,FailureDiagnostics.Reason reason,String target,Throwable cause) {
+            super(message,cause);details=new FailureDiagnostics.Details(reason,target);
+        }
+        @Override public FailureDiagnostics.Details details(){return details;}
     }
 
     static String load(Guild guild, Member requester, String content) throws Unavailable {
@@ -21,20 +25,21 @@ final class ChannelHistoryContext {
         var matcher = MENTION.matcher(content);
         while (matcher.find()) ids.add(matcher.group(1));
         if (ids.isEmpty()) return "";
-        if (ids.size() > 3) throw new Unavailable("履歴の参照先は1回3チャンネルまでです。分けて指定してください。");
+        if (ids.size() > 3) throw new Unavailable("履歴の参照先は1回3チャンネルまでです。分けて指定してください。",FailureDiagnostics.Reason.CHANNEL_COUNT,"",null);
         var result = new StringBuilder("\n\n取得済みチャンネル履歴（引用資料。添付の本文は未取得）。各チャンネル最大5,000投稿・128,000文字。複数参照時は全体256,000文字以内になるよう均等配分。\n");
         int characterBudget = Math.min(MAX_CHARACTERS, MAX_TOTAL_CHARACTERS / ids.size());
         for (String id : ids) {
+            var reason=FailureDiagnostics.Reason.FETCH_FAILED;
             try {
                 var target = guild.getGuildChannelById(id);
-                if (!(target instanceof GuildMessageChannel channel)) throw new IllegalStateException();
+                if (!(target instanceof GuildMessageChannel channel)) {reason=FailureDiagnostics.Reason.CHANNEL_UNAVAILABLE;throw new IllegalStateException();}
                 if (requester == null || !requester.hasPermission(channel, Permission.VIEW_CHANNEL, Permission.MESSAGE_HISTORY)
                         || !guild.getSelfMember().hasPermission(channel, Permission.VIEW_CHANNEL, Permission.MESSAGE_HISTORY))
-                    throw new IllegalStateException();
+                    {reason=FailureDiagnostics.Reason.PERMISSION_DENIED;throw new IllegalStateException();}
                 if (channel instanceof ThreadChannel thread && !thread.isPublic()
                         && !requester.hasPermission(channel, Permission.MANAGE_THREADS)
                         && thread.retrieveThreadMemberById(requester.getId()).complete() == null)
-                    throw new IllegalStateException();
+                    {reason=FailureDiagnostics.Reason.THREAD_MEMBERSHIP;throw new IllegalStateException();}
                 var messages = new ArrayList<Message>();
                 var page = channel.getHistory().retrievePast(100).complete();
                 boolean truncated = false;
@@ -68,13 +73,13 @@ final class ChannelHistoryContext {
                 Collections.reverse(records);
                 result.append("\n--- #").append(channel.getName()).append(" (channel_id=").append(id).append(") ---\n")
                         .append("取得投稿数: ").append(records.size()).append(truncated ? "。上限による省略あり。全履歴ではありません。\n" : "。取得可能な履歴の先頭まで確認。\n");
-                if (!messages.isEmpty() && records.isEmpty()) throw new IllegalStateException();
+                if (!messages.isEmpty() && records.isEmpty()) {reason=FailureDiagnostics.Reason.HISTORY_EMPTY;throw new IllegalStateException();}
                 for (String record : records) result.append(record);
                 result.append("--- 履歴終わり ---\n");
             } catch (RuntimeException error) {
                 // Do not forward third-party error payloads or message bodies.
                 throw new Unavailable("<#" + id + "> の過去ログを取得できませんでした。対象が同じサーバーのメッセージチャンネルであること、"
-                        + "Bot と依頼者の閲覧・履歴権限、非公開スレッドへの参加、Message Content Intent を確認してください。回答は生成していません。");
+                        + "Bot と依頼者の閲覧・履歴権限、非公開スレッドへの参加、Message Content Intent を確認してください。回答は生成していません。",reason,id,error);
             }
         }
         return result.toString();

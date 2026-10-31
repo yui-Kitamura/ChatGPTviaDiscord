@@ -35,6 +35,7 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
         feedback.pickedUp();
         try{worker.submit(()->process(event,feedback));}
         catch(RejectedExecutionException e){
+            FailureDiagnostics.log("AI_QUEUE",e,event.getMessage().getId());
             try(feedback){feedback.reply("処理待ちが多いため受け付けられませんでした。後で再投稿してください。",()->{});}
         }
     }
@@ -45,54 +46,57 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
     Future<String> switchMode(net.dv8tion.jda.api.entities.Guild guild,
                             net.dv8tion.jda.api.entities.channel.middleman.MessageChannel channel, ResponseMode mode, String requestedTitle) {
         // Serialize with ordinary replies so an in-flight response cannot restore old numbers.
+        String sourceId=FailureDiagnostics.sourceId();
         return worker.submit(() -> {
-            settings.setMode(channel.getId(), mode);
-            String result="この場所の応答モードを " + mode.value() + " に保存しました。";
-            if(mode==ResponseMode.QA)return result+(requestedTitle.isEmpty()?"":"\n"+requestedTitle);
-            try {
-                var account=session.ready(guild.getId());
-                String key=historyKey(channel.getId(),account);
-                var saved=history.load(key);
-                String title=requestedTitle;
-                boolean fallback=false;
-                if(title.isEmpty()) {
-                    if(account.model.isEmpty())throw new ChatGptException("model_required",0);
-                    String request="この場所で新しいスレを始めます。これまでの会話を参考に、スレタイを1つだけ作成してください。タイトル本文だけを100文字以内で返してください。";
-                    var input=new ArrayList<>(saved.turns);
-                    input.add(Map.of("role","user","content",request));
-                    ChatHistory.trim(input);
-                    String context=instructions+ServerModelContext.load(guild);
-                    try {
-                        title=transport.respond(account.accessToken,account.model,
-                                context+"\n新しいスレタイを作成してください。過去のレス番号は引き継ぎません。",input,OpenAiTransport.Progress.NONE).strip();
-                        if(title.isBlank()||title.length()>100||title.contains("\n")||title.contains("\r"))
-                            throw new java.io.IOException("Invalid thread title.");
-                    } catch(java.io.IOException e) {
-                        if(e instanceof ChatGptException failure)failure.log();
-                        else System.err.println("GVD_THREAD_TITLE_FAILED error_type="+e.getClass().getSimpleName());
-                        title="新しいスレ";
-                        fallback=true;
+            try(var diagnostic=FailureDiagnostics.context(sourceId)) {
+                settings.setMode(channel.getId(), mode);
+                String result="この場所の応答モードを " + mode.value() + " に保存しました。";
+                if(mode==ResponseMode.QA)return result+(requestedTitle.isEmpty()?"":"\n"+requestedTitle);
+                try {
+                    var account=session.ready(guild.getId());
+                    String key=historyKey(channel.getId(),account);
+                    var saved=history.load(key);
+                    String title=requestedTitle;
+                    boolean fallback=false;
+                    if(title.isEmpty()) {
+                        if(account.model.isEmpty())throw new ChatGptException("model_required",0);
+                        String request="この場所で新しいスレを始めます。これまでの会話を参考に、スレタイを1つだけ作成してください。タイトル本文だけを100文字以内で返してください。";
+                        var input=new ArrayList<>(saved.turns);
+                        input.add(Map.of("role","user","content",request));
+                        ChatHistory.trim(input);
+                        String context=instructions+ServerModelContext.load(guild);
+                        try {
+                            title=transport.respond(account.accessToken,account.model,
+                                    context+"\n新しいスレタイを作成してください。過去のレス番号は引き継ぎません。",input,OpenAiTransport.Progress.NONE).strip();
+                            if(title.isBlank()||title.length()>100||title.contains("\n")||title.contains("\r"))
+                                throw new java.io.IOException("Invalid thread title.");
+                        } catch(java.io.IOException e) {
+                            if(e instanceof ChatGptException failure)failure.log();
+                            FailureDiagnostics.log("THREAD_TITLE",e);
+                            title="新しいスレ";
+                            fallback=true;
+                        }
                     }
+                    if(!session.isCurrent(guild.getId(),account))throw new ChatGptException("login_required",0);
+                    String firstPost="## "+title+"\n>>1";
+                    var sent=channel.sendMessage(firstPost).setAllowedMentions(List.of()).complete();
+                    saved.nextPost=2;
+                    saved.postMessages.clear();
+                    saved.postMessages.put(1L,sent.getId());
+                    // Keep prior turns for title generation only; the new thread starts at this >>1.
+                    saved.turns=new ArrayList<>();
+                    saved.turns.add(Map.of("role","user","content","スレタイ："+title+"\n新しいスレを開始します。以後は >>2 から続けてください。"));
+                    saved.turns.add(Map.of("role","assistant","content",firstPost));
+                    history.save(key,saved);
+                    responseCompleted.run();
+                    return result+(fallback?"\nスレタイを生成できなかったため、「新しいスレ」で開始し、安価をリセットしました。"
+                            :"\nスレタイを >>1 に投稿し、安価をリセットしました。");
+                } catch(ChatGptException e) {
+                    e.log();FailureDiagnostics.log("THREAD_START",e);return result+"\nスレ開始は完了していません。"+e.userMessage();
+                } catch(Exception e) {
+                    FailureDiagnostics.log("THREAD_START",e);
+                    return result+"\nスレタイ投稿・安価リセットを完了できませんでした。接続・送信権限・保存先を確認して mode thread を再実行してください。";
                 }
-                if(!session.isCurrent(guild.getId(),account))throw new ChatGptException("login_required",0);
-                String firstPost="## "+title+"\n>>1";
-                var sent=channel.sendMessage(firstPost).setAllowedMentions(List.of()).complete();
-                saved.nextPost=2;
-                saved.postMessages.clear();
-                saved.postMessages.put(1L,sent.getId());
-                // Keep prior turns for title generation only; the new thread starts at this >>1.
-                saved.turns=new ArrayList<>();
-                saved.turns.add(Map.of("role","user","content","スレタイ："+title+"\n新しいスレを開始します。以後は >>2 から続けてください。"));
-                saved.turns.add(Map.of("role","assistant","content",firstPost));
-                history.save(key,saved);
-                responseCompleted.run();
-                return result+(fallback?"\nスレタイを生成できなかったため、「新しいスレ」で開始し、安価をリセットしました。"
-                        :"\nスレタイを >>1 に投稿し、安価をリセットしました。");
-            } catch(ChatGptException e) {
-                e.log();return result+"\nスレ開始は完了していません。"+e.userMessage();
-            } catch(Exception e) {
-                System.err.println("GVD_THREAD_START_FAILED error_type="+e.getClass().getSimpleName());
-                return result+"\nスレタイ投稿・安価リセットを完了できませんでした。接続・送信権限・保存先を確認して mode thread を再実行してください。";
             }
         });
     }
@@ -100,7 +104,7 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
         return channelId+"-"+UUID.nameUUIDFromBytes((account.clientId+":"+account.subject).getBytes(StandardCharsets.UTF_8));
     }
     private void process(MessageReceivedEvent event,MessageFeedback feedback) {
-        try(feedback) {
+        try(var diagnostic=FailureDiagnostics.context(event.getMessage().getId());feedback) {
             Message message=event.getMessage();String user=event.getAuthor().getId();
             String parent=event.getChannelType().isThread()?event.getChannel().asThreadChannel().getParentChannel().getId():null;
             if(!access.permits(event.getGuild().getMemberById(user))||!controls.shouldRespond(event.getGuild().getId(),event.getChannel().getId(),parent,false,false,message.getType()))return;
@@ -140,6 +144,7 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
                 if(context.mode()==ResponseMode.THREAD) {
                     try {generated=CharacterReply.parse(response,context,saved.nextPost);}
                     catch(java.io.IOException|IllegalArgumentException e) {
+                        FailureDiagnostics.log("CHARACTER_PARSE",e);
                         feedback.reply("キャラ応答の形式を確認できなかったため、ロール作成・回答の確定は行っていません。自動再試行はしていません。");return;
                     }
                     if(characterRoles==null)characterRoles=new CharacterRoles(settings,roleGateway.apply(event.getGuild()));
@@ -147,9 +152,10 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
                         try {return session.isCurrent(event.getGuild().getId(),account)&&access.permits(event.getGuild().getMemberById(user))
                                 &&settings.mode(event.getChannel().getId())==context.mode()
                                 &&controls.shouldRespond(event.getGuild().getId(),event.getChannel().getId(),parent,false,false,message.getType());}
-                        catch(java.io.IOException e){return false;}
+                        catch(java.io.IOException e){FailureDiagnostics.log("CHARACTER_PERMISSION_RECHECK",e);return false;}
                     });}
                     catch(java.io.IOException|RuntimeException e) {
+                        FailureDiagnostics.log("CHARACTER_ROLES",e);
                         feedback.reply("キャラのロール作成・保存を完了できませんでした。Bot のロール管理権限・階層・保存先と利用許可を確認してください。回答は確定していません。");return;
                     }
                     if(!session.isCurrent(event.getGuild().getId(),account)||!access.permits(event.getGuild().getMemberById(user)))return;
@@ -163,11 +169,11 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
                     ThreadReplySender.send(message,generated,firstPost,roles,saved,()->history.save(key,saved));
                     responseCompleted.run();
                 }
-            }catch(AttachmentInput.Unavailable error){feedback.reply(error.getMessage());}
-            catch(ChannelHistoryContext.Unavailable error){feedback.reply(error.getMessage());}
-            catch(ServerModelContext.Unavailable error){feedback.reply(error.getMessage());}
-            catch(ChatGptException error){error.log();feedback.reply(error.userMessage());}
-            catch(Exception error){System.err.println("GVD_AI_FAILED error_type="+error.getClass().getSimpleName());feedback.reply("応答または会話の保存を完了できませんでした。時間を置いて再投稿してください。自動再試行はしていません。");}
+            }catch(AttachmentInput.Unavailable error){FailureDiagnostics.log("ATTACHMENT",error);feedback.reply(error.getMessage());}
+            catch(ChannelHistoryContext.Unavailable error){FailureDiagnostics.log("CHANNEL_HISTORY",error);feedback.reply(error.getMessage());}
+            catch(ServerModelContext.Unavailable error){FailureDiagnostics.log("SERVER_DOCUMENT",error);feedback.reply(error.getMessage());}
+            catch(ChatGptException error){error.log();FailureDiagnostics.log("AI_REQUEST",error);feedback.reply(error.userMessage());}
+            catch(Exception error){FailureDiagnostics.log("AI_PROCESS",error);feedback.reply("応答または会話の保存を完了できませんでした。時間を置いて再投稿してください。自動再試行はしていません。");}
         }
     }
     @Override public void close(){worker.shutdownNow();feedbacks.forEach(MessageFeedback::clear);}

@@ -52,23 +52,24 @@ final class TrashMessages extends ListenerAdapter implements AutoCloseable {
             try {
                 worker.execute(() -> {
                     String result;
-                    try { result = sweep(event.getJDA()); }
-                    catch (Exception e) { log(e); result = "処理を完了できませんでした。対象名・Bot権限・通信を確認してください。転送済みの投稿は次回、削除を再試行します。"; }
+                    try(var diagnostic=FailureDiagnostics.context(event.getId())) { result = sweep(event.getJDA()); }
+                    catch (Exception e) { FailureDiagnostics.log("TRASH",e,event.getId()); result = "処理を完了できませんでした。対象名・Bot権限・通信を確認してください。転送済みの投稿は次回、削除を再試行します。"; }
                     finally { running.set(false); }
-                    hook.editOriginal(result).setAllowedMentions(List.of()).queue(ignored -> {}, TrashMessages::log);
+                    hook.editOriginal(result).setAllowedMentions(List.of()).queue(ignored -> {}, error->FailureDiagnostics.delivery("TRASH_REPLY",hook,error));
                 });
             } catch (RejectedExecutionException e) {
+                FailureDiagnostics.log("TRASH_QUEUE",e,event.getId());
                 running.set(false);
-                hook.editOriginal("Botは停止中です。後で再実行してください。").queue();
+                hook.editOriginal("Botは停止中です。後で再実行してください。").queue(ignored->{},error->FailureDiagnostics.delivery("TRASH_REPLY",hook,error));
             }
-        }, error -> { running.set(false); log(error); });
+        }, error -> { running.set(false); FailureDiagnostics.log("TRASH_ACK",error,event.getId()); });
     }
 
     String sweep(JDA jda) {
         Guild guild = jda.getGuildById(guildId);
-        if (guild == null) return "対象サーバーが見つかりません。";
+        if (guild == null) return refusal("TRASH_GUILD_MISSING","対象サーバーが見つかりません。");
         var channels = guild.getTextChannelsByName("チラシの裏", false);
-        if (channels.size() != 1) return "「チラシの裏」が存在しないか、同名チャンネルが複数あります。処理を中止しました。";
+        if (channels.size() != 1) return refusal("TRASH_SOURCE_COUNT","「チラシの裏」が存在しないか、同名チャンネルが複数あります。処理を中止しました。");
         TextChannel source = channels.getFirst();
         var threads = new LinkedHashMap<String, ThreadChannel>();
         guild.retrieveActiveThreads().complete().stream()
@@ -77,13 +78,13 @@ final class TrashMessages extends ListenerAdapter implements AutoCloseable {
         for (var t : source.retrieveArchivedPublicThreadChannels()) threads.put(t.getId(), t);
         for (var t : source.retrieveArchivedPrivateJoinedThreadChannels()) threads.put(t.getId(), t);
         var matches = threads.values().stream().filter(t -> "ゴミ箱".equals(t.getName())).toList();
-        if (matches.size() != 1) return "「チラシの裏」内の「ゴミ箱」が存在しないか、同名スレッドが複数あります。処理を中止しました。";
+        if (matches.size() != 1) return refusal("TRASH_TARGET_COUNT","「チラシの裏」内の「ゴミ箱」が存在しないか、同名スレッドが複数あります。処理を中止しました。");
         ThreadChannel target = matches.getFirst();
         var self = guild.getSelfMember();
         if (!self.hasPermission(source, Permission.VIEW_CHANNEL, Permission.MESSAGE_HISTORY, Permission.MESSAGE_MANAGE)
                 || !self.hasPermission(target, Permission.VIEW_CHANNEL, Permission.MESSAGE_HISTORY, Permission.MESSAGE_SEND_IN_THREADS))
-            return "Botに閲覧・履歴・元投稿削除・スレッド送信の権限が必要です。処理を中止しました。";
-        if (target.isLocked()) return "「ゴミ箱」がロックされています。処理を中止しました。";
+            return refusal("TRASH_PERMISSION","Botに閲覧・履歴・元投稿削除・スレッド送信の権限が必要です。処理を中止しました。");
+        if (target.isLocked()) return refusal("TRASH_LOCKED","「ゴミ箱」がロックされています。処理を中止しました。");
 
         // Recover from a successful forward followed by failed deletion, including across restarts.
         Set<String> forwarded = new HashSet<>();
@@ -101,7 +102,7 @@ final class TrashMessages extends ListenerAdapter implements AutoCloseable {
                 if (target.isArchived()) target.getManager().setArchived(false).complete();
                 move(message, target, forwarded);
                 moved++;
-            } catch (Exception e) { failed++; log(e); }
+            } catch (Exception e) { failed++; FailureDiagnostics.log("TRASH_MOVE",e,message.getId()); }
         }
         return "ゴミ箱への転送・元投稿削除: " + moved + "件、失敗: " + failed + "件。";
     }
@@ -130,8 +131,10 @@ final class TrashMessages extends ListenerAdapter implements AutoCloseable {
         message.delete().complete();
     }
 
+    private String refusal(String operation,String text) {FailureDiagnostics.log(operation,null,guildId);return text;}
+
     private static void log(Throwable error) {
-        System.err.println("TRASH_FAILED error_type=" + error.getClass().getSimpleName());
+        FailureDiagnostics.log("TRASH",error);
     }
     @Override public void onShutdown(ShutdownEvent event) { close(); }
     @Override public void close() { worker.shutdownNow(); }

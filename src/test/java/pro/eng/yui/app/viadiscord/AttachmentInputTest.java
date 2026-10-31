@@ -11,12 +11,18 @@ import net.dv8tion.jda.api.utils.NamedAttachmentProxy;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+@org.junit.jupiter.api.extension.ExtendWith(AttachmentHttpFixture.class)
 class AttachmentInputTest {
     @TempDir Path directory;
     static Message.Attachment attachment(String name,String mime,byte[] bytes) {
         var attachment=mock(Message.Attachment.class);var proxy=mock(NamedAttachmentProxy.class);
+        when(attachment.getId()).thenReturn("1566000639157473371");
         when(attachment.getFileName()).thenReturn(name);when(attachment.getContentType()).thenReturn(mime);
         when(attachment.getSize()).thenReturn(bytes.length);when(attachment.getProxy()).thenReturn(proxy);
+        String url="https://cdn.discordapp.com/attachments/test/"+UUID.randomUUID()+"/"+name;
+        when(attachment.getUrl()).thenReturn(url);
+        when(attachment.getProxyUrl()).thenReturn("https://media.discordapp.net/transformed/"+name);
+        AttachmentHttpFixture.sources.put(url,proxy);
         when(proxy.download()).thenAnswer(i->CompletableFuture.completedFuture(new ByteArrayInputStream(bytes)));
         return attachment;
     }
@@ -58,7 +64,26 @@ class AttachmentInputTest {
         var image=attachment("a.png","image/png",new byte[]{1});
         when(image.getProxy().download()).thenReturn(CompletableFuture.failedFuture(new IOException("secret signed URL")));
         var error=assertThrows(AttachmentInput.Unavailable.class,()->AttachmentInput.content("",List.of(image)));
+        assertNotNull(error.getCause());
+        assertEquals(FailureDiagnostics.Reason.DOWNLOAD_FAILED,error.details().reason());
+        assertFalse(FailureDiagnosticsTest.capture(()->FailureDiagnostics.log("ATTACHMENT",error)).contains("secret"));
         assertFalse(error.getMessage().contains("secret"));assertTrue(error.getMessage().contains("AIへの送信は行っていません"));
+    }
+    @Test void imageUsesOriginalEvenWhenProxySizeWouldDiffer() throws Exception {
+        var image=attachment("phone.jpg","image/jpeg",new byte[]{1,2,3,4});
+        when(image.getProxy()).thenThrow(new AssertionError("Transformed image proxy must not be used"));
+        var json=ChatGptAccounts.JSON.valueToTree(AttachmentInput.content("",List.of(image)));
+        assertEquals("data:image/jpeg;base64,AQIDBA==",json.get(0).path("image_url").asText());
+        verify(image,never()).getProxy();
+    }
+    @Test void originalSizeMismatchStillRejectsSubmission() {
+        var image=attachment("phone.jpg","image/jpeg",new byte[]{1,2,3});
+        when(image.getSize()).thenReturn(4);
+        var error=assertThrows(AttachmentInput.Unavailable.class,()->AttachmentInput.content("",List.of(image)));
+        assertEquals(FailureDiagnostics.Reason.SIZE_MISMATCH,error.details().reason());
+        String log=FailureDiagnosticsTest.capture(()->FailureDiagnostics.log("ATTACHMENT",error,"1566000639157473370"));
+        assertTrue(log.contains("reason=SIZE_MISMATCH target=1566000639157473371 declared_bytes=4 actual_bytes=3"));
+        assertFalse(log.contains("phone.jpg"));
     }
     @Test void historyBudgetDropsOldInlineAttachmentsBeforeNextRequest() throws Exception {
         var turns=new ArrayList<Map<String,Object>>();

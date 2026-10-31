@@ -18,8 +18,10 @@ class CodexUsageClient {
     CodexUsageClient(CodexUsageConfig config, Launcher launcher) { this.config = config; this.launcher = launcher; }
 
     String query(String expectedEmail) {
-        if (expectedEmail == null || expectedEmail.isBlank())
+        if (expectedEmail == null || expectedEmail.isBlank()) {
+            FailureDiagnostics.log("CODEX_USAGE_EMAIL_MISSING",null);
             return unavailable("Bot側のメールアドレスを確認できません。管理者が接続を確認してください。");
+        }
         Process process = null;
         var worker = Executors.newSingleThreadExecutor(Thread.ofVirtual().factory());
         Future<CodexUsageSnapshot> pending = null;
@@ -40,15 +42,19 @@ class CodexUsageClient {
             pending = worker.submit(() -> read(child, expectedEmail));
             return pending.get(config.timeout().toMillis(), TimeUnit.MILLISECONDS).display();
         } catch (TimeoutException e) {
+            FailureDiagnostics.log("CODEX_USAGE_TIMEOUT",e);
             return unavailable("照会がタイムアウトしました。管理者がCodexの接続を確認してください。");
         } catch (InterruptedException e) {
+            FailureDiagnostics.log("CODEX_USAGE_INTERRUPTED",e);
             Thread.currentThread().interrupt();
             return unavailable("照会を中断しました。");
         } catch (ExecutionException e) {
+            FailureDiagnostics.log("CODEX_USAGE_READ",e);
             if (e.getCause() instanceof AccountMismatch)
                 return unavailable("Codex側の接続が未認証・別アカウント、またはメールアドレス不明です。Botと同じアカウントで専用保存先へログインしてください。");
             return unavailable("照会に失敗しました。管理者がCodexのログイン・バージョン・通信を確認してください。");
         } catch (IOException | RuntimeException e) {
+            FailureDiagnostics.log("CODEX_USAGE_START",e);
             return unavailable("Codexを起動できません。管理者が実行ファイルと専用保存先を確認してください。");
         } finally {
             if (process != null) {

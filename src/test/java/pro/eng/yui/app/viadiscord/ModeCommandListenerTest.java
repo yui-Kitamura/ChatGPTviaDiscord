@@ -28,7 +28,7 @@ class ModeCommandListenerTest {
         when(hook.editOriginal(anyString())).thenReturn(edit);
         var defer=event.deferReply(false);
         doAnswer(i->{((java.util.function.Consumer<net.dv8tion.jda.api.interactions.InteractionHook>)i.getArgument(0)).accept(hook);return null;})
-                .when(defer).queue(any());
+                .when(defer).queue(any(),any());
         var settings=new ResponseSettings(directory.resolve("public.properties"));
         var listener=new ModeCommandListener(GUILD,settings,null,null);
         try {
