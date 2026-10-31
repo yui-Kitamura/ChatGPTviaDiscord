@@ -23,13 +23,15 @@ class OpenAiTransportTest {
             Object input=AttachmentInput.content("hello",List.of(
                     AttachmentInputTest.attachment("a.png","image/png",new byte[]{1,2,3}),
                     AttachmentInputTest.attachment("a.pdf","application/pdf",new byte[]{4,5,6})));
-            assertEquals("こんにちは",transport(server).respond("secret","available-model","guide",List.of(Map.of("role","user","content",input))));
+            assertEquals("こんにちは",transport(server).respond("secret","available-model","guide",List.of(ChatTimestamps.turn("user",input,java.time.OffsetDateTime.parse("2026-10-30T18:02:03Z")))));
             var r=request.get();assertFalse(r.path("store").asBoolean());assertTrue(r.path("stream").asBoolean());assertTrue(r.path("input").isArray());
             assertEquals(Set.of("model","instructions","input","store","stream"),toSet(r.fieldNames()));
             var content=r.path("input").get(0).path("content");
-            assertEquals("hello",content.get(0).path("text").asText());
-            assertEquals("data:image/png;base64,AQID",content.get(1).path("image_url").asText());
-            assertEquals("data:application/pdf;base64,BAUG",content.get(2).path("file_data").asText());
+            assertEquals("[発言日時: 2026-10-31 03:02:03 +09:00 JST]\n",content.get(0).path("text").asText());
+            assertEquals("hello",content.get(1).path("text").asText());
+            assertEquals(Set.of("role","content"),toSet(r.path("input").get(0).fieldNames()));
+            assertEquals("data:image/png;base64,AQID",content.get(2).path("image_url").asText());
+            assertEquals("data:application/pdf;base64,BAUG",content.get(3).path("file_data").asText());
         }finally{server.stop(0);}
     }
     @Test void reportsReceivingBeforeTheStreamCompletes() throws Exception {

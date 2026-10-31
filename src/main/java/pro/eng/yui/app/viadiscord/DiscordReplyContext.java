@@ -45,6 +45,7 @@ final class DiscordReplyContext {
                     else missingAnswer = true;
                 }
                 data.put("author_id", target.getAuthor().getId());
+                data.put("timestamp_jst", ChatTimestamps.format(target.getTimeCreated()));
                 data.put("status", missingAnswer || body.isBlank() ? "body_unavailable" : "resolved");
                 data.put("body", body.substring(0, Math.min(body.length(), MAX_BODY)));
                 data.put("body_truncated", body.length() > MAX_BODY);

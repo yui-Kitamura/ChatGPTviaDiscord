@@ -27,6 +27,7 @@ class AiConversationTest {
         var h=new GvdListenerTest();h.directory=directory;h.setUp();
         when(h.user.getId()).thenReturn(user);var member=AiAccessTest.member(false,allowed?new String[]{ROLE}:new String[]{});
         when(h.messageEvent.getMember()).thenReturn(member);when(h.guild.getMemberById(user)).thenReturn(member);
+        when(h.message.getTimeCreated()).thenReturn(OffsetDateTime.parse("2026-10-30T18:02:03Z"));
         when(h.message.getId()).thenReturn(id);when(h.message.getContentRaw()).thenReturn(content);
         var mentions=mock(net.dv8tion.jda.api.entities.Mentions.class);when(mentions.getRoles()).thenReturn(List.of());when(h.message.getMentions()).thenReturn(mentions);
         when(h.message.reply(anyString())).thenReturn(h.reply);
@@ -65,7 +66,10 @@ class AiConversationTest {
         var calls=new AtomicInteger();var release=new CountDownLatch(1);var started=new CountDownLatch(1);
         var transport=new OpenAiTransport(Duration.ofSeconds(3)){
             @Override String respond(String token,String model,String instructions,List<Map<String,Object>> turns,OpenAiTransport.Progress progress) {
-                assertEquals(List.of(Map.of("role","user","content","question\n[転送メッセージ・引用資料]\n資料")),turns);
+                assertEquals(1,turns.size());
+                assertEquals("user",turns.getFirst().get("role"));
+                assertEquals("question\n[転送メッセージ・引用資料]\n資料",turns.getFirst().get("content"));
+                assertTrue(turns.getFirst().get("timestamp_jst").toString().endsWith("+09:00 JST"));
                 if(calls.incrementAndGet()==1)return "invalid";
                 started.countDown();try{assertTrue(release.await(5,TimeUnit.SECONDS));}catch(InterruptedException e){throw new AssertionError(e);}
                 return CharacterReplyTest.REPLY.replace("[4]","[]");
@@ -204,7 +208,7 @@ class AiConversationTest {
                         new ResponseSettings(path.resolve("mode.properties")),history,"guide")) {
                     ai.accept((forwardFirst?forward:note).messageEvent);ai.accept((forwardFirst?note:forward).messageEvent);
                     assertTrue(done.await(5,TimeUnit.SECONDS));
-                    assertEquals(List.of(Map.of("role","user","content","説明して\n[転送メッセージ・引用資料]\n資料")),request.get());
+                    assertEquals(List.of(ChatTimestamps.turn("user","説明して\n[転送メッセージ・引用資料]\n資料",time)),request.get());
                     verify(forward.message,never()).reply(anyString());
                     String key=ChannelControlsTest.CHANNEL+"-"+UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
                     var saved=history.load(key);assertTrue(saved.ids.containsAll(List.of(note.message.getId(),forward.message.getId())));
@@ -466,6 +470,9 @@ class AiConversationTest {
                 new GvdListener(second.controls,ai).onMessageReceived(second.messageEvent);assertTrue(done2.await(5,TimeUnit.SECONDS));
             }
             assertEquals(2,calls.get());assertEquals(List.of("first","answer","second"),input.get().stream().map(t->t.get("content")).toList());
+            assertEquals("2026-10-31 03:02:03 +09:00 JST",input.get().getFirst().get("timestamp_jst"));
+            assertTrue(input.get().get(1).get("timestamp_jst").toString().endsWith("+09:00 JST"));
+            assertEquals("2026-10-31 03:02:03 +09:00 JST",input.get().getLast().get("timestamp_jst"));
             verify(second.reply).mentionRepliedUser(false);verify(second.reply).setSuppressedNotifications(true);verify(second.reply).setAllowedMentions(argThat(Collection::isEmpty));
         }
     }
