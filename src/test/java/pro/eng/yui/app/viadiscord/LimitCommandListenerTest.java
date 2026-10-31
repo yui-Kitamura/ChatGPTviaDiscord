@@ -67,6 +67,31 @@ class LimitCommandListenerTest {
         assertFalse(reply.contains("未実装"));assertFalse(reply.contains("残り 0"));assertFalse(reply.contains("100%"));
     }
 
+    @Test void optionalCodexLookupUsesSharedEmailAndKeepsPublicReplyWithinDiscordLimit() throws Exception {
+        var account = connected();
+        var usage = mock(CodexUsageClient.class);
+        var result = ChatGptAccounts.JSON.createObjectNode();
+        var buckets = result.putObject("rateLimitsByLimitId");
+        for (int i = 0; i < 4; i++) {
+            var bucket = buckets.putObject("a".repeat(39) + i);
+            for (String kind : new String[]{"primary", "secondary"}) {
+                var window = bucket.putObject(kind);
+                window.put("usedPercent", 25);window.put("windowDurationMins", Integer.MAX_VALUE);window.put("resetsAt", 253402300799L);
+            }
+        }
+        when(usage.query(account.email)).thenReturn(CodexUsageSnapshot.parse(result, java.time.Instant.now()).display());
+        var enabled = new LimitCommandListener(GUILD, session, transport, usage);
+        try {
+            String reply = enabled.query();
+            assertTrue(reply.contains("残り 75.0%"));
+            assertTrue(reply.length() <= 2000);
+            assertFalse(reply.contains("公開 API では数値を確認できません"));
+            assertFalse(reply.contains(account.email));assertFalse(reply.contains(account.accessToken));
+            verify(usage).query(account.email);
+            verify(transport, never()).respond(anyString(), anyString(), anyString(), anyList());
+        } finally { enabled.onShutdown(null); }
+    }
+
     @Test void loginAndNetworkFailuresDoNotExposeUpstreamText() throws Exception {
         when(session.ready(GUILD)).thenThrow(new ChatGptException("login_required", 0));
         assertTrue(listener.query().contains("再ログイン"));verifyNoInteractions(transport);

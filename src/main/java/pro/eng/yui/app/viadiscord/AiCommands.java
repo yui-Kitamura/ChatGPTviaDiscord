@@ -32,7 +32,7 @@ final class AiCommands extends ListenerAdapter {
         }
         event.deferReply(true).queue(hook->{
             try{worker.submit(()->{
-                try {
+                try(var diagnostic=FailureDiagnostics.context(event.getId())) {
                     // A queued command must not retain access after its role was removed.
                     if(!access.permits(event.getGuild().getMemberById(event.getUser().getId())) || !event.getGuild().getMemberById(event.getUser().getId()).hasPermission(Permission.MANAGE_SERVER)) {say(hook,"許可ロールがなくなったため処理を中止しました。");return;}
                     if("model".equals(sub)){models(event,hook);return;}
@@ -54,11 +54,11 @@ final class AiCommands extends ListenerAdapter {
                         case "logout" -> say(hook,session.logout(user,label));
                         default -> say(hook,"action は login/status/use/logout です。");
                     }
-                }catch(ChatGptException e){e.log();say(hook,e.userMessage());}
-                catch(IllegalArgumentException e){say(hook,"設定値を確認してください。account は英数字・_・-の1〜32文字です。");}
-                catch(Exception e){say(hook,"処理を完了できませんでした。設定と接続を確認して再実行してください。");}
-            });}catch(RejectedExecutionException e){say(hook,"処理が混み合っています。後で再実行してください。");}
-        });
+                }catch(ChatGptException e){e.log();FailureDiagnostics.log("AUTH_MODEL_COMMAND",e,event.getId());say(hook,e.userMessage());}
+                catch(IllegalArgumentException e){FailureDiagnostics.log("AUTH_MODEL_ARGUMENT",e,event.getId());say(hook,"設定値を確認してください。account は英数字・_・-の1〜32文字です。");}
+                catch(Exception e){FailureDiagnostics.log("AUTH_MODEL_COMMAND",e,event.getId());say(hook,"処理を完了できませんでした。設定と接続を確認して再実行してください。");}
+            });}catch(RejectedExecutionException e){FailureDiagnostics.log("AUTH_MODEL_QUEUE",e,event.getId());say(hook,"処理が混み合っています。後で再実行してください。");}
+        },error->FailureDiagnostics.log("AUTH_MODEL_ACK",error,event.getId()));
     }
     private static String keyFor(String user,String label){return ChatGptAccounts.key(user,label);}
     private void roles(SlashCommandInteractionEvent event,String sub) {
@@ -71,8 +71,8 @@ final class AiCommands extends ListenerAdapter {
                     String list=members.stream().filter(access::permits).sorted(Comparator.comparing(m->m.getId()))
                             .map(m->m.getEffectiveName()+" ("+m.getId()+")").collect(java.util.stream.Collectors.joining("\n"));
                     say(hook,"登録ロール: "+(configured.isEmpty()?"なし":configured)+"\n現在使える人:\n"+(list.isEmpty()?"なし":list));
-                }).onError(error->say(hook,"メンバー一覧を取得できませんでした。Server Members Intentを確認してください。"));
-            });return;
+                }).onError(error->{FailureDiagnostics.log("MEMBER_LIST",error,event.getId());say(hook,"メンバー一覧を取得できませんでした。Server Members Intentを確認してください。");});
+            },error->FailureDiagnostics.log("MEMBER_LIST_ACK",error,event.getId()));return;
         }
         if(event.getMember()==null||!event.getMember().hasPermission(Permission.MANAGE_SERVER)){
             event.reply("許可ロールの変更にはサーバー管理権限が必要です。").setEphemeral(true).queue();return;
@@ -82,7 +82,7 @@ final class AiCommands extends ListenerAdapter {
         }
         String roleId=option.getAsRole().getId();
         event.deferReply(true).queue(hook->{try{access.update(roleId,"accept".equals(sub));say(hook,"<@&"+roleId+"> をAI利用の許可対象"+("accept".equals(sub)?"に追加しました。":"から削除しました。")+"\n複数の登録ロールがある場合は、どれか1つを持つ人が利用できます。");}
-            catch(Exception e){say(hook,"保存できなかったため、許可設定を変更していません。");}});
+            catch(Exception e){FailureDiagnostics.log("ACCESS_SAVE",e,event.getId());say(hook,"保存できなかったため、許可設定を変更していません。");}},error->FailureDiagnostics.log("ACCESS_ACK",error,event.getId()));
     }
     private void models(SlashCommandInteractionEvent event,InteractionHook hook) throws Exception {
         synchronized(session) {
@@ -97,9 +97,11 @@ final class AiCommands extends ListenerAdapter {
     }
     private static String option(SlashCommandInteractionEvent e,String name,String fallback){var o=e.getOption(name);return o==null?fallback:o.getAsString();}
     private static void say(InteractionHook hook,String text){
+        try {
         var edit=hook.editOriginal(text.length()<=1900?text:"一覧・結果を添付しました。").setAllowedMentions(List.of());
         if(text.length()>1900)edit.setFiles(FileUpload.fromData(text.getBytes(java.nio.charset.StandardCharsets.UTF_8),"result.txt"));
-        edit.queue(ignored->{},error->{});
+        edit.queue(ignored->{},error->FailureDiagnostics.delivery("AUTH_MODEL_REPLY",hook,error));
+        } catch(RuntimeException error){FailureDiagnostics.delivery("AUTH_MODEL_REPLY",hook,error);}
     }
     @Override public void onShutdown(ShutdownEvent event){worker.shutdownNow();}
 }

@@ -52,7 +52,7 @@ class OpenAiTransport {
     synchronized JWKSet keys(String kid) throws IOException {
         if(keys==null||keys.getKeyByKeyId(kid)==null||keysAt.plusSeconds(3600).isBefore(Instant.now())) {
             try { keys=JWKSet.parse(json(HttpRequest.newBuilder(jwksEndpoint).timeout(Duration.ofSeconds(20)).GET().build()).toString());keysAt=Instant.now(); }
-            catch(java.text.ParseException e){throw new IOException("Invalid OpenAI signing keys.");}
+            catch(java.text.ParseException e){throw new IOException("Invalid OpenAI signing keys.",e);}
         }
         return keys;
     }
@@ -70,10 +70,23 @@ class OpenAiTransport {
             models.add(new Model(model.path("slug").asText(),model.path("display_name").asText()));
         return List.copyOf(models);
     }
-    String respond(String token,String model,String instructions,List<Map<String,String>> history) throws IOException {
+    interface Progress {
+        Progress NONE = new Progress() {};
+        default void sent() {}
+        default void receiving() {}
+        default void failed() {}
+    }
+    String respond(String token,String model,String instructions,List<Map<String,Object>> history) throws IOException {
+        return respond(token,model,instructions,history,Progress.NONE);
+    }
+    String respond(String token,String model,String instructions,List<Map<String,Object>> history,Progress progress) throws IOException {
+        try {return respondStream(token,model,instructions,history,progress);}
+        catch(IOException | RuntimeException failure) {progress.failed();throw failure;}
+    }
+    private String respondStream(String token,String model,String instructions,List<Map<String,Object>> history,Progress progress) throws IOException {
         String payload=ChatGptAccounts.JSON.writeValueAsString(Map.of("model",model,"instructions",instructions,"input",history,"store",false,"stream",true));
         var request=authorized(api.resolve("responses"),token).timeout(timeout).header("Content-Type","application/json").header("Accept","text/event-stream")
-                .POST(HttpRequest.BodyPublishers.ofString(payload)).build();
+                .POST(publishing(payload,progress)).build();
         HttpResponse<InputStream> response;
         try {response=send(request,r->observe(token,model,r));}
         catch(ChatGptException failure){outcome(token,model,failure.code);throw failure;}
@@ -81,7 +94,7 @@ class OpenAiTransport {
             var stop=timer.schedule(()->{try{input.close();}catch(IOException ignored){}},timeout.toMillis(),TimeUnit.MILLISECONDS);
             try {
                 var reader=new BufferedReader(new InputStreamReader(input,StandardCharsets.UTF_8));
-                var text=new StringBuilder();var data=new StringBuilder();boolean completed=false;
+                var text=new StringBuilder();var data=new StringBuilder();boolean completed=false,receiving=false,rejected=false;
                 int total=0;
                 for(String line;(line=reader.readLine())!=null;) {
                     if((total+=line.length())>2_000_000)throw new IOException("ChatGPT response exceeds local limit.");
@@ -90,6 +103,10 @@ class OpenAiTransport {
                     String value=data.toString().trim();data.setLength(0);
                     if("[DONE]".equals(value))break;
                     var event=ChatGptAccounts.JSON.readTree(value);String type=event.path("type").asText();
+                    if("response.refusal.delta".equals(type)) {rejected=true;progress.failed();}
+                    if("response.output_text.delta".equals(type)&&!receiving&&!rejected&&!event.path("delta").asText().isEmpty()) {
+                        receiving=true;progress.receiving();
+                    }
                     if("response.output_text.delta".equals(type)||"response.refusal.delta".equals(type))text.append(event.path("delta").asText());
                     if("response.failed".equals(type)||"error".equals(type))throw failure(event.path("response").has("error")?event.path("response"):event,200);
                     if("response.incomplete".equals(type))throw new ChatGptException("incomplete",200);
@@ -101,6 +118,21 @@ class OpenAiTransport {
             catch(IOException failure) {outcome(token,model,"failed");throw failure;}
             finally {stop.cancel(false);}
         }
+    }
+    // Signal after the HTTP client has consumed the request body, before it can receive a response.
+    private static HttpRequest.BodyPublisher publishing(String payload,Progress progress) {
+        var body=HttpRequest.BodyPublishers.ofString(payload);
+        return new HttpRequest.BodyPublisher() {
+            public long contentLength() {return body.contentLength();}
+            public void subscribe(Flow.Subscriber<? super java.nio.ByteBuffer> subscriber) {
+                body.subscribe(new Flow.Subscriber<java.nio.ByteBuffer>() {
+                    public void onSubscribe(Flow.Subscription subscription) {subscriber.onSubscribe(subscription);}
+                    public void onNext(java.nio.ByteBuffer bytes) {subscriber.onNext(bytes);}
+                    public void onError(Throwable failure) {subscriber.onError(failure);}
+                    public void onComplete() {progress.sent();subscriber.onComplete();}
+                });
+            }
+        };
     }
     private HttpRequest.Builder authorized(URI uri,String token){return HttpRequest.newBuilder(uri).timeout(timeout).header("Authorization","Bearer "+token);}
     private HttpResponse<InputStream> send(HttpRequest request) throws IOException {
@@ -116,7 +148,7 @@ class OpenAiTransport {
                 var failure=failure(error,response.statusCode());failure.requestId=requestId(response);throw failure;
             }
             return response;
-        } catch(InterruptedException e){Thread.currentThread().interrupt();throw new IOException("ChatGPT request interrupted.");}
+        } catch(InterruptedException e){Thread.currentThread().interrupt();throw new IOException("ChatGPT request interrupted.",e);}
     }
     private JsonNode json(HttpRequest request) throws IOException {
         try(var body=send(request).body()){

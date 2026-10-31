@@ -31,7 +31,7 @@ class CommandRegistrationTest(unittest.TestCase):
         payload = json.loads(requests[1].data)
         self.assertEqual([0], payload['contexts'])
         self.assertEqual([0], payload['integration_types'])
-        self.assertEqual(['skipch', 'readch', 'mode', 'accept', 'reject', 'auth', 'model', 'limit'], [item['name'] for item in payload['options']])
+        self.assertEqual(['skipch', 'readch', 'mode', 'accept', 'reject', 'auth', 'model', 'trash', 'limit'], [item['name'] for item in payload['options']])
         limit = next(item for item in payload['options'] if item['name'] == 'limit')
         self.assertEqual(1, limit['type'])
         self.assertFalse(limit.get('options'))
@@ -45,6 +45,11 @@ class CommandRegistrationTest(unittest.TestCase):
         self.assertEqual(3, mode['type'])
         self.assertTrue(mode['required'])
         self.assertEqual([{'name': name, 'value': name} for name in ['thread', 'qa']], mode['choices'])
+        title = payload['options'][2]['options'][1]
+        self.assertEqual('title', title['name'])
+        self.assertEqual(3, title['type'])
+        self.assertFalse(title['required'])
+        self.assertEqual(100, title['max_length'])
 
     def test_accept_is_optional_and_reject_requires_a_role(self):
         by_name = {item['name']: item for item in module.command_definition()['options']}
@@ -54,6 +59,11 @@ class CommandRegistrationTest(unittest.TestCase):
         self.assertTrue(by_name['reject']['options'][0]['required'])
         self.assertEqual(['login', 'status', 'use', 'logout'],
                          [choice['value'] for choice in by_name['auth']['options'][0]['choices']])
+
+    def test_missing_mode_title_is_not_reported_as_success(self):
+        actual = module.command_definition()['options']
+        actual[2]['options'].pop()
+        self.assertFalse(module.matches_definition(actual, module.command_definition()['options']))
 
     def test_incomplete_registration_is_not_reported_as_success(self):
         def opener(request, timeout):
@@ -100,6 +110,14 @@ class CommandRegistrationTest(unittest.TestCase):
             return io.StringIO(json.dumps(result))
         with self.assertRaises(ValueError):
             module.register('synthetic-token', opener)
+
+    def test_trash_has_no_options_and_must_be_registered(self):
+        expected = module.command_definition()['options']
+        trash = next(item for item in expected if item['name'] == 'trash')
+        self.assertEqual(1, trash['type'])
+        self.assertFalse(trash.get('options'))
+        actual = [item for item in expected if item['name'] != 'trash']
+        self.assertFalse(module.matches_definition(actual, expected))
 
     def test_missing_token_does_not_make_a_network_request(self):
         def forbidden(*args, **kwargs):

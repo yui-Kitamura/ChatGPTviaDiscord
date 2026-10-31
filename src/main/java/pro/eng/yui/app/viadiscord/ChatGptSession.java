@@ -139,7 +139,7 @@ final class ChatGptSession implements AutoCloseable {
                     :"ChatGPTへの接続が完了しませんでした。同意・アカウント・Workspaceを確認し、/gvd auth を再実行してください。");
         }
     }
-    private static void safeResult(Attempt a,String text){try{a.result.accept(text);}catch(RuntimeException ignored){}}
+    private static void safeResult(Attempt a,String text){try{a.result.accept(text);}catch(RuntimeException error){FailureDiagnostics.log("AUTH_RESULT_DELIVERY",error);}}
     private boolean validRequest(HttpExchange exchange,String path) {
         return "GET".equals(exchange.getRequestMethod())&&path.equals(exchange.getRequestURI().getPath())
                 && exchange.getRemoteAddress().getAddress().isLoopbackAddress()
@@ -181,7 +181,7 @@ final class ChatGptSession implements AutoCloseable {
             if(response.has("id_token"))try {
                 var jwt=SignedJWT.parse(updated.idToken);
                 OpenAiIdentity.verify(updated.idToken,updated.clientId,null,updated.subject,transport.keys(jwt.getHeader().getKeyID()),Instant.now());
-            }catch(Exception e){updated.accessToken="";updated.idToken="";accounts.put(key,updated,false);throw new IOException("Refreshed identity validation failed.");}
+            }catch(Exception e){updated.accessToken="";updated.idToken="";accounts.put(key,updated,false);throw new IOException("Refreshed identity validation failed.",e);}
             try { accounts.put(key,updated,false); }
             catch(IOException e) { unsafeRefresh.add(key);throw e; }
             account=updated;
@@ -203,7 +203,7 @@ final class ChatGptSession implements AutoCloseable {
     synchronized String logout(String user,String label) throws IOException {
         String key=ChatGptAccounts.key(user,label);var account=accounts.get(key);boolean revoked=true;
         attempts.values().removeIf(a->a.key.equals(key));generations.merge(key,1L,Long::sum);
-        if(account!=null&&!account.refreshToken.isEmpty())try{transport.revoke(account);}catch(IOException e){revoked=false;}
+        if(account!=null&&!account.refreshToken.isEmpty())try{transport.revoke(account);}catch(IOException e){FailureDiagnostics.log("AUTH_REVOKE",e);revoked=false;}
         accounts.clearTokens(key);
         return revoked?"ログアウトしました。アカウントの登録情報とホストIDは次回ログイン用に保持しています。"
                 :"ローカルではログアウトしましたが、OpenAI側の失効を確認できませんでした。ChatGPT設定からアプリ接続を解除してください。";
