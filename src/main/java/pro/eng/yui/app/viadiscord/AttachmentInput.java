@@ -4,6 +4,7 @@ import java.io.*;
 import java.util.*;
 import java.util.concurrent.*;
 import net.dv8tion.jda.api.entities.Message;
+import net.dv8tion.jda.api.utils.NamedAttachmentProxy;
 
 /** Inline bytes avoid relying on Discord's expiring signed URLs on later turns. */
 final class AttachmentInput {
@@ -52,7 +53,8 @@ final class AttachmentInput {
     }
     private static Unavailable tooLarge(){return new Unavailable("添付の合計は1投稿10 MiBまでです。ファイルを分割・縮小して再投稿してください。AIへの送信は行っていません。");}
     private static byte[] download(Message.Attachment attachment,int remaining) throws IOException {
-        var future=attachment.getProxy().download();
+        // Metadata size describes the original, not Discord's transformed image proxy.
+        var future=new NamedAttachmentProxy(attachment.getUrl(),attachment.getFileName()).download();
         try {
             try(var input=future.get(30,TimeUnit.SECONDS);
                 var timer=Executors.newSingleThreadScheduledExecutor(Thread.ofVirtual().factory())) {

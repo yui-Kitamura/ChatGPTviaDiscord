@@ -12,6 +12,7 @@ import net.dv8tion.jda.api.entities.Message;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+@org.junit.jupiter.api.extension.ExtendWith(AttachmentHttpFixture.class)
 class AiConversationTest {
     @TempDir Path directory;
     static final String ROLE="1565364891676713192",USER="123456789012345678";
