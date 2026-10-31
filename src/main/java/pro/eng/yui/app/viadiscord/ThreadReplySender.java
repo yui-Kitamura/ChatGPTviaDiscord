@@ -20,13 +20,17 @@ final class ThreadReplySender {
     }
     static void send(Message source, CharacterReply reply, long firstPost,
                      List<ResponseSettings.CharacterRole> roles, ChatHistory.History saved, Save save, SaveReply saveReply) throws IOException {
-        source.reply("発言サマリ：" + reply.summary())
+        String summaryBody=firstPost + ">> " + reply.summary();
+        Message summary=source.reply(summaryBody)
                 .mentionRepliedUser(false).setAllowedMentions(List.of()).setSuppressedNotifications(true)
                 .failOnInvalidReply(true).complete();
+        saved.postMessages.put(firstPost,summary.getId());
+        save.run();
+        saveReply.run(summary.getId(),summaryBody);
         Map<String,String> roleIds=roles.stream().collect(Collectors.toMap(r->r.character().name(), ResponseSettings.CharacterRole::roleId));
         for(int i=0;i<reply.posts().size();i++) {
             var post=reply.posts().get(i);
-            long number=firstPost+i;
+            long number=firstPost+1+i;
             var text=new StringBuilder().append(number).append("：").append(post.character());
             String roleId=roleIds.get(post.character());
             if(roleId!=null)text.append(" <@&").append(roleId).append('>');

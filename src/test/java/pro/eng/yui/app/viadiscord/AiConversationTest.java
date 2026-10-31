@@ -30,6 +30,7 @@ class AiConversationTest {
         when(h.message.getId()).thenReturn(id);when(h.message.getContentRaw()).thenReturn(content);
         var mentions=mock(net.dv8tion.jda.api.entities.Mentions.class);when(mentions.getRoles()).thenReturn(List.of());when(h.message.getMentions()).thenReturn(mentions);
         when(h.message.reply(anyString())).thenReturn(h.reply);
+        var summary=mock(Message.class);when(summary.getId()).thenReturn("876654321098765432");when(h.reply.complete()).thenReturn(summary);
         ServerModelContextTest.documents(h.guild);return h;
     }
     @Test void discordReplyReachesProviderAndSentBodyIsSaved() throws Exception {
@@ -115,9 +116,9 @@ class AiConversationTest {
                 listener.onButtonInteraction(click);assertTrue(started.await(5,TimeUnit.SECONDS));listener.onButtonInteraction(click);
                 assertEquals(2,calls.get());verify(sent).editMessageComponents(anyCollection());
                 release.countDown();assertTrue(finished.await(5,TimeUnit.SECONDS));
-                verify(channel).sendMessage(contains("1：案内人"));
+                verify(channel).sendMessage(contains("2：案内人"));
                 String key=ChannelControlsTest.CHANNEL+"-"+UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
-                assertEquals(List.of("post","forward"),history.load(key).ids);assertEquals(2,history.load(key).nextPost);
+                assertEquals(List.of("post","forward"),history.load(key).ids);assertEquals(3,history.load(key).nextPost);
                 when(click.getComponentId()).thenReturn(AiConversation.RETRY_PREFIX+"unknown");listener.onButtonInteraction(click);
                 verify(click,atLeastOnce()).reply(contains("期限切れ"));assertEquals(2,calls.get());
             }finally{release.countDown();}
@@ -415,8 +416,8 @@ class AiConversationTest {
                         while(beforeSend.get()==Long.MAX_VALUE||java.nio.file.Files.size(historyFile)<=beforeSend.get())Thread.sleep(10);
                     });
                 }
-                verify(h.message).reply(startsWith("発言サマリ：説明を求めている。"));
-                verify(h.messageEvent.getChannel()).sendMessage(contains(n+"：案内人 <@&456789012345678901>"));
+                verify(h.message).reply(startsWith((2*n-1)+">> 説明を求めている。"));
+                verify(h.messageEvent.getChannel()).sendMessage(contains((2*n)+"：案内人 <@&456789012345678901>"));
                 verify(postAction,never()).setMessageReference(anyString());
                 if(n==2)verify(h.messageEvent.getChannel()).sendMessage(contains("[>>1](https://discord.com/channels/"));
                 assertEquals(1,settings.characters().size());
@@ -424,10 +425,10 @@ class AiConversationTest {
             assertTimeoutPreemptively(Duration.ofSeconds(5),()->{while(completed.get()!=2)Thread.sleep(10);});
             assertEquals(1,created.get());assertEquals(2,calls.get());
             assertTrue(prompt.get().contains("server background"));assertTrue(prompt.get().contains("server guidance"));assertTrue(prompt.get().contains("server user profile"));assertTrue(prompt.get().contains("server reference material"));
-            assertTrue(prompt.get().contains("先頭レス番号: 2"));assertTrue(prompt.get().contains("今回メンションされたキャラ名: [\"案内人\"]"));
+            assertTrue(prompt.get().contains("先頭レス番号: 4"));assertTrue(prompt.get().contains("今回メンションされたキャラ名: [\"案内人\"]"));
             String key=ChannelControlsTest.CHANNEL+"-"+UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
             var saved=new ChatHistory(directory.resolve("history")).load(key);
-            assertEquals(3,saved.nextPost);assertEquals(4,saved.turns.size());
+            assertEquals(5,saved.nextPost);assertEquals(4,saved.turns.size());
             assertTrue(saved.turns.get(1).get("content").toString().contains("\"characters\""));
         }
     }

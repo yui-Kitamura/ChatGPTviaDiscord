@@ -20,6 +20,7 @@ record CharacterReply(String summary, List<CharacterSpec> characters, List<Post>
                 形式: {"summary":"今回のユーザー発言の簡潔なサマリ","characters":[{"name":"キャラ名","persona":"役割・性格・話し方"}],
                 "posts":[{"character":"キャラ名","text":"本文","references":[]}]}
                 summary は今回のユーザー発言だけを簡潔に要約する（1〜500文字）。回答や推測を混ぜない。
+                summary は先頭レス番号の1つ前に Bot が採番して投稿する。references でこの番号も参照できる。
                 posts は1〜16件、目安は8〜16件。characters は今回発言する新規キャラの定義で8件まで。
                 保存済みキャラは名前で再利用できる。定義を変更しない。新規と既存を合わせて発言者は8人まで。
                 保存済みキャラが64人なら新規を作らず既存から選ぶ。
