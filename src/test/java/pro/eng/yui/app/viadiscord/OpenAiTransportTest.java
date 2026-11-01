@@ -25,7 +25,10 @@ class OpenAiTransportTest {
                     AttachmentInputTest.attachment("a.pdf","application/pdf",new byte[]{4,5,6})));
             assertEquals("こんにちは",transport(server).respond("secret","available-model","guide",List.of(ChatTimestamps.turn("user",input,java.time.OffsetDateTime.parse("2026-10-30T18:02:03Z")))));
             var r=request.get();assertFalse(r.path("store").asBoolean());assertTrue(r.path("stream").asBoolean());assertTrue(r.path("input").isArray());
-            assertEquals(Set.of("model","instructions","input","store","stream"),toSet(r.fieldNames()));
+            assertEquals("web_search",r.path("tools").get(0).path("type").asText());
+            assertTrue(r.path("tools").get(0).path("external_web_access").asBoolean());
+            assertEquals("auto",r.path("tool_choice").asText());
+            assertEquals(Set.of("model","instructions","input","store","stream","tools","tool_choice"),toSet(r.fieldNames()));
             var content=r.path("input").get(0).path("content");
             assertEquals("[発言日時: 2026-10-31 03:02:03 +09:00 JST]\n",content.get(0).path("text").asText());
             assertEquals("hello",content.get(1).path("text").asText());
@@ -82,6 +85,47 @@ class OpenAiTransportTest {
             else assertThrows(java.io.IOException.class,()->transport(server).respond("secret","m","i",List.of(),progress));
             assertEquals(List.of("sent","failed"),stages);
         } finally {server.stop(0);}
+    }
+    @Test void webToolEventsPreserveTextAndCollectOnlyValidCitationsAfterCompletion() throws Exception {
+        var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+        server.createContext("/responses",e->{
+            e.getRequestBody().readAllBytes();
+            var citation=Map.of("type","url_citation","url","https://example.com/source","title","Source");
+            var content=Map.of("type","output_text","annotations",List.of(citation,
+                    Map.of("type","url_citation","url","https://example.com/other"),
+                    Map.of("type","url_citation","url","javascript:alert(1)"),
+                    Map.of("type","url_citation","url","https://user:password@example.com/"),
+                    Map.of("type","url_citation","url","https://example.com/\\n@everyone")));
+            var events=List.of(
+                    Map.of("type","response.output_item.added","item",Map.of("type","web_search_call")),
+                    Map.of("type","response.web_search_call.searching"),
+                    Map.of("type","response.output_text.delta","delta","answer"),
+                    Map.of("type","response.output_text.annotation.added","annotation",citation),
+                    Map.of("type","response.completed","response",Map.of("output",List.of(Map.of("type","message","content",List.of(content))))));
+            var stream=new StringBuilder();
+            for(var event:events)stream.append("data: ").append(ChatGptAccounts.JSON.writeValueAsString(event)).append("\n\n");
+            byte[] data=stream.toString().getBytes(StandardCharsets.UTF_8);
+            e.sendResponseHeaders(200,data.length);e.getResponseBody().write(data);e.close();
+        });server.start();
+        try {
+            var urls=new AtomicReference<List<String>>();
+            var progress=new OpenAiTransport.Progress(){public void sources(List<String> sources){urls.set(sources);}};
+            var answer=transport(server).respond("secret","m","guide",List.of(),progress);
+            assertEquals("answer",answer);
+            assertEquals(List.of("https://example.com/source","https://example.com/other"),urls.get());
+        }finally{server.stop(0);}
+    }
+    @Test void unsupportedWebSearchIsReportedWithoutRetryingWithoutTools() throws Exception {
+        var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);var calls=new AtomicInteger();
+        server.createContext("/responses",e->{
+            calls.incrementAndGet();e.getRequestBody().readAllBytes();
+            byte[] data="{\"error\":{\"code\":\"unsupported_tool\",\"message\":\"private upstream detail\"}}".getBytes(StandardCharsets.UTF_8);
+            e.sendResponseHeaders(400,data.length);e.getResponseBody().write(data);e.close();
+        });server.start();
+        try {
+            var error=assertThrows(ChatGptException.class,()->transport(server).respond("secret","m","guide",List.of()));
+            assertEquals("unsupported_tool",error.code);assertFalse(error.getMessage().contains("private"));assertEquals(1,calls.get());
+        }finally{server.stop(0);}
     }
     private static Set<String> toSet(Iterator<String> i){var set=new HashSet<String>();i.forEachRemaining(set::add);return set;}
     @Test void oauthDescriptionsBecomeOnlyControlledHintsAndNeverLeakRawText() throws Exception {

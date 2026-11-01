@@ -387,6 +387,7 @@ class AiConversationTest {
         var transport=new OpenAiTransport(Duration.ofSeconds(3)){
             @Override String respond(String token,String model,String instructions,List<Map<String,Object>> turns,OpenAiTransport.Progress progress){
                 prompt.set(instructions);int n=calls.incrementAndGet();
+                progress.sources(List.of("https://example.com/source"));
                 assertTrue(ChatGptAccounts.JSON.valueToTree(turns).toString().contains("data:image/png;base64,AQID"));
                 return CharacterReplyTest.REPLY.replace("[4]",n==1?"[]":"[1]");
             }
@@ -422,6 +423,7 @@ class AiConversationTest {
                 }
                 verify(h.message).reply(startsWith((2*n-1)+">> 説明を求めている。"));
                 verify(h.messageEvent.getChannel()).sendMessage(contains((2*n)+"：案内人 <@&456789012345678901>"));
+                verify(h.messageEvent.getChannel()).sendMessage(contains("出典:\nhttps://example.com/source"));
                 verify(postAction,never()).setMessageReference(anyString());
                 if(n==2)verify(h.messageEvent.getChannel()).sendMessage(contains("[>>1](https://discord.com/channels/"));
                 assertEquals(1,settings.characters().size());
@@ -429,6 +431,8 @@ class AiConversationTest {
             assertTimeoutPreemptively(Duration.ofSeconds(5),()->{while(completed.get()!=2)Thread.sleep(10);});
             assertEquals(1,created.get());assertEquals(2,calls.get());
             assertTrue(prompt.get().contains("server background"));assertTrue(prompt.get().contains("server guidance"));assertTrue(prompt.get().contains("server user profile"));assertTrue(prompt.get().contains("server reference material"));
+            assertTrue(prompt.get().contains("Web検索ツールを利用できます"));
+            assertFalse(prompt.get().contains("Web閲覧・記憶検索・外部操作ツールはありません"));
             assertTrue(prompt.get().contains("先頭レス番号: 4"));assertTrue(prompt.get().contains("今回メンションされたキャラ名: [\"案内人\"]"));
             String key=ChannelControlsTest.CHANNEL+"-"+UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
             var saved=new ChatHistory(directory.resolve("history")).load(key);

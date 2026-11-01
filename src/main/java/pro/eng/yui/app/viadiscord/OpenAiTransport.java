@@ -75,6 +75,7 @@ class OpenAiTransport {
         default void sent() {}
         default void receiving() {}
         default void failed() {}
+        default void sources(List<String> urls) {}
     }
     String respond(String token,String model,String instructions,List<Map<String,Object>> history) throws IOException {
         return respond(token,model,instructions,history,Progress.NONE);
@@ -84,7 +85,8 @@ class OpenAiTransport {
         catch(IOException | RuntimeException failure) {progress.failed();throw failure;}
     }
     private String respondStream(String token,String model,String instructions,List<Map<String,Object>> history,Progress progress) throws IOException {
-        String payload=ChatGptAccounts.JSON.writeValueAsString(Map.of("model",model,"instructions",instructions,"input",ChatTimestamps.input(history),"store",false,"stream",true));
+        String payload=ChatGptAccounts.JSON.writeValueAsString(Map.of("model",model,"instructions",instructions,"input",ChatTimestamps.input(history),"store",false,"stream",true,
+                "tools",List.of(Map.of("type","web_search","external_web_access",true)),"tool_choice","auto"));
         var request=authorized(api.resolve("responses"),token).timeout(timeout).header("Content-Type","application/json").header("Accept","text/event-stream")
                 .POST(publishing(payload,progress)).build();
         HttpResponse<InputStream> response;
@@ -95,6 +97,7 @@ class OpenAiTransport {
             try {
                 var reader=new BufferedReader(new InputStreamReader(input,StandardCharsets.UTF_8));
                 var text=new StringBuilder();var data=new StringBuilder();boolean completed=false,receiving=false,rejected=false;
+                var sources=new LinkedHashSet<String>();
                 int total=0;
                 for(String line;(line=reader.readLine())!=null;) {
                     if((total+=line.length())>2_000_000)throw new IOException("ChatGPT response exceeds local limit.");
@@ -108,12 +111,18 @@ class OpenAiTransport {
                         receiving=true;progress.receiving();
                     }
                     if("response.output_text.delta".equals(type)||"response.refusal.delta".equals(type))text.append(event.path("delta").asText());
+                    if("response.output_text.annotation.added".equals(type))collectCitation(event.path("annotation"),sources);
                     if("response.failed".equals(type)||"error".equals(type))throw failure(event.path("response").has("error")?event.path("response"):event,200);
                     if("response.incomplete".equals(type))throw new ChatGptException("incomplete",200);
-                    if("response.completed".equals(type)){completed=true;break;}
+                    if("response.completed".equals(type)){
+                        for(var item:event.path("response").path("output"))
+                            if("message".equals(item.path("type").asText()))for(var content:item.path("content"))
+                                for(var annotation:content.path("annotations"))collectCitation(annotation,sources);
+                        completed=true;break;
+                    }
                 }
                 if(!completed||text.isEmpty())throw new ChatGptException("interrupted_stream",200);
-                outcome(token,model,"success");return text.toString();
+                outcome(token,model,"success");progress.sources(List.copyOf(sources));return text.toString();
             } catch(ChatGptException failure) {outcome(token,model,failure.code);failure.requestId=requestId(response);throw failure;}
             catch(IOException failure) {outcome(token,model,"failed");throw failure;}
             finally {stop.cancel(false);}
@@ -133,6 +142,16 @@ class OpenAiTransport {
                 });
             }
         };
+    }
+    private static void collectCitation(JsonNode annotation,Set<String> sources) {
+        if(!"url_citation".equals(annotation.path("type").asText()))return;
+        String url=annotation.path("url").asText();
+        try {
+            URI uri=URI.create(url);
+            if(("https".equalsIgnoreCase(uri.getScheme())||"http".equalsIgnoreCase(uri.getScheme()))
+                    &&uri.getHost()!=null&&uri.getRawUserInfo()==null
+                    &&url.chars().noneMatch(c->Character.isWhitespace(c)||Character.isISOControl(c)||c=='<'||c=='>'))sources.add(url);
+        }catch(IllegalArgumentException ignored){}
     }
     private HttpRequest.Builder authorized(URI uri,String token){return HttpRequest.newBuilder(uri).timeout(timeout).header("Authorization","Bearer "+token);}
     private HttpResponse<InputStream> send(HttpRequest request) throws IOException {
