@@ -21,7 +21,49 @@ class OpenAiTransportTest {
         try {
             assertEquals("こんにちは",transport(server).respond("secret","available-model","guide",List.of(Map.of("role","user","content","hello"))));
             var r=request.get();assertFalse(r.path("store").asBoolean());assertTrue(r.path("stream").asBoolean());assertTrue(r.path("input").isArray());
-            assertEquals(Set.of("model","instructions","input","store","stream"),toSet(r.fieldNames()));
+            assertEquals("web_search",r.path("tools").get(0).path("type").asText());
+            assertTrue(r.path("tools").get(0).path("external_web_access").asBoolean());
+            assertEquals("auto",r.path("tool_choice").asText());
+            assertEquals(Set.of("model","instructions","input","store","stream","tools","tool_choice"),toSet(r.fieldNames()));
+        }finally{server.stop(0);}
+    }
+    @Test void webToolEventsPreserveTextAndCollectOnlyValidCitationsAfterCompletion() throws Exception {
+        var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+        server.createContext("/responses",e->{
+            e.getRequestBody().readAllBytes();
+            var citation=Map.of("type","url_citation","url","https://example.com/source","title","Source");
+            var content=Map.of("type","output_text","annotations",List.of(citation,
+                    Map.of("type","url_citation","url","https://example.com/other"),
+                    Map.of("type","url_citation","url","javascript:alert(1)"),
+                    Map.of("type","url_citation","url","https://user:password@example.com/"),
+                    Map.of("type","url_citation","url","https://example.com/\\n@everyone")));
+            var events=List.of(
+                    Map.of("type","response.output_item.added","item",Map.of("type","web_search_call")),
+                    Map.of("type","response.web_search_call.searching"),
+                    Map.of("type","response.output_text.delta","delta","answer"),
+                    Map.of("type","response.output_text.annotation.added","annotation",citation),
+                    Map.of("type","response.completed","response",Map.of("output",List.of(Map.of("type","message","content",List.of(content))))));
+            var stream=new StringBuilder();
+            for(var event:events)stream.append("data: ").append(ChatGptAccounts.JSON.writeValueAsString(event)).append("\n\n");
+            byte[] data=stream.toString().getBytes(StandardCharsets.UTF_8);
+            e.sendResponseHeaders(200,data.length);e.getResponseBody().write(data);e.close();
+        });server.start();
+        try {
+            var answer=transport(server).respondAnswer("secret","m","guide",List.of());
+            assertEquals("answer",answer.text());
+            assertEquals(List.of("https://example.com/source","https://example.com/other"),answer.sources());
+        }finally{server.stop(0);}
+    }
+    @Test void unsupportedWebSearchIsReportedWithoutRetryingWithoutTools() throws Exception {
+        var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);var calls=new AtomicInteger();
+        server.createContext("/responses",e->{
+            calls.incrementAndGet();e.getRequestBody().readAllBytes();
+            byte[] data="{\"error\":{\"code\":\"unsupported_tool\",\"message\":\"private upstream detail\"}}".getBytes(StandardCharsets.UTF_8);
+            e.sendResponseHeaders(400,data.length);e.getResponseBody().write(data);e.close();
+        });server.start();
+        try {
+            var error=assertThrows(ChatGptException.class,()->transport(server).respondAnswer("secret","m","guide",List.of()));
+            assertEquals("unsupported_tool",error.code);assertFalse(error.getMessage().contains("private"));assertEquals(1,calls.get());
         }finally{server.stop(0);}
     }
     private static Set<String> toSet(Iterator<String> i){var set=new HashSet<String>();i.forEachRemaining(set::add);return set;}

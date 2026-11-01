@@ -59,6 +59,7 @@ class LimitCommandListenerTest {
         assertFalse(reply.contains(account.email));assertFalse(reply.contains(account.accessToken));
         verify(session).ready(GUILD);verify(transport).models(account.accessToken);
         verify(transport, never()).respond(anyString(), anyString(), anyString(), anyList());
+        verify(transport, never()).respondAnswer(anyString(), anyString(), anyString(), anyList());
     }
 
     @Test void absentMetadataIsUnknownAndNotZeroOrFull() throws Exception {

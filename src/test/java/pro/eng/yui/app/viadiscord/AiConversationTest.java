@@ -31,9 +31,9 @@ class AiConversationTest {
     @Test void threadCreatesAndReusesRolesWithPersistentNumbersAndMentionContext() throws Exception {
         var calls=new AtomicInteger();var prompt=new AtomicReference<String>();
         var transport=new OpenAiTransport(Duration.ofSeconds(3)){
-            @Override String respond(String token,String model,String instructions,List<Map<String,String>> turns){
+            @Override Answer respondAnswer(String token,String model,String instructions,List<Map<String,String>> turns){
                 prompt.set(instructions);int n=calls.incrementAndGet();
-                return CharacterReplyTest.REPLY.replace("[4]",n==1?"[]":"[1]");
+                return new Answer(CharacterReplyTest.REPLY.replace("[4]",n==1?"[]":"[1]"),List.of("https://example.com/source"));
             }
         };
         var created=new AtomicInteger();
@@ -52,8 +52,11 @@ class AiConversationTest {
                     ai.accept(h.messageEvent);assertTrue(done.await(5,TimeUnit.SECONDS));
                 }
                 verify(h.message).reply(contains(n+"：名無しの案内人"));
+                verify(h.message).reply(contains("出典:\nhttps://example.com/source"));
                 assertEquals(1,settings.characters().size());
             }
+            assertTrue(prompt.get().contains("Web検索ツールを利用できます"));
+            assertFalse(prompt.get().contains("Web閲覧・記憶検索・外部操作ツールはありません"));
             assertEquals(1,created.get());assertEquals(2,calls.get());
             assertTrue(prompt.get().contains("先頭レス番号: 2"));assertTrue(prompt.get().contains("今回メンションされたキャラ名: [\"案内人\"]"));
             String key=ChannelControlsTest.CHANNEL+"-"+UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
@@ -65,7 +68,7 @@ class AiConversationTest {
 
     @Test void failedRoleCreationDoesNotCommitAnswerOrAdvanceNumbers() throws Exception {
         var transport=new OpenAiTransport(Duration.ofSeconds(3)){
-            @Override String respond(String token,String model,String instructions,List<Map<String,String>> turns){return CharacterReplyTest.REPLY.replace("[4]","[]");}
+            @Override Answer respondAnswer(String token,String model,String instructions,List<Map<String,String>> turns){return new Answer(CharacterReplyTest.REPLY.replace("[4]","[]"),List.of());}
         };
         try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)){
             account(accounts);var h=event(USER,true,"post","question");var settings=new ResponseSettings(directory.resolve("response.properties"));
@@ -82,7 +85,7 @@ class AiConversationTest {
     @Test void twoDiscordUsersUseSharedAccountAndConversationSurvivesReopen() throws Exception {
         var input=new AtomicReference<List<Map<String,String>>>();var calls=new AtomicInteger();
         var transport=new OpenAiTransport(Duration.ofSeconds(3)){
-            @Override String respond(String token,String model,String instructions,List<Map<String,String>> turns){assertEquals("access",token);assertEquals("chosen",model);input.set(List.copyOf(turns));calls.incrementAndGet();return "answer";}
+            @Override Answer respondAnswer(String token,String model,String instructions,List<Map<String,String>> turns){assertEquals("access",token);assertEquals("chosen",model);input.set(List.copyOf(turns));calls.incrementAndGet();return new Answer("answer",List.of());}
         };
         try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)){
             account(accounts);var access=new AiAccess(directory,ROLE);var history=new ChatHistory(directory.resolve("history"));

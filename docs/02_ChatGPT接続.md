@@ -106,3 +106,13 @@ OpenAIのログイン画面内で止まりcallbackへ戻っていない場合は
 - [モデル一覧・Responses](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference)
 - [トークン更新・ログアウト](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions)
 - [プレビューの制約](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)
+
+## Web 検索と URL 参照
+
+Responses リクエストに `tools: [{"type":"web_search","external_web_access":true}]` と `tool_choice: "auto"` を渡し、全応答モードで Web 検索を利用可能にする。URL の参照・検索の依頼や最新情報の確認ではツールで調べるよう指示する。各回に検索するかはモデルが判断する。Bot 側の追加 API キーや検索サービスの登録は不要で、既存の ChatGPT 接続を使う。
+
+検索の引用注釈が返った場合、応答の末尾に出典 URL を表示する。掛け合いモードでは JSON の検証・表示変換後に付けるため、JSON の外に出典を追記して解析を壊さない。長文は従来どおり添付になる。
+
+URL 本文の取得を保証する機能ではない。認証が必要なページ・共有ページ・取得不可のサイトなどは読めない場合がある。取得できた情報と未取得のページを区別する。長期記憶検索や外部サービスへの書き込みは追加しない。
+
+[公式 Web 検索仕様](https://developers.openai.com/api/docs/guides/tools-web-search)に従う。選択モデルと ChatGPT 接続での実際のツール利用可否は、稼働環境で検索の依頼と公開 URL の参照を試し、取得結果と出典で確認する。API がツール非対応などで失敗した場合は、ツールを外した再試行や別の課金方式への切り替えを行わず既存のエラー処理で知らせる。ローカルの模擬 SSE テストは実アカウントでの検索成功やデプロイ完了を証明しない。
