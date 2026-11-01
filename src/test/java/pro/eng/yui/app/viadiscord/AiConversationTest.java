@@ -159,6 +159,47 @@ class AiConversationTest {
         assertEquals(captor.getValue().getFirst(),history.load(key).turns.getFirst());
     }
 
+    @Test void bundledForwardSourceContextReachesProviderButIsNotPersisted() throws Exception {
+        var captured=new AtomicReference<List<Map<String,Object>>>();
+        var transport=mock(OpenAiTransport.class);
+        when(transport.respond(anyString(),anyString(),anyString(),anyList(),any(OpenAiTransport.Progress.class))).thenAnswer(i->{
+            captured.set(List.copyOf(i.getArgument(3)));return "answer";
+        });
+        var note=event(USER,true,"note-context","説明して");
+        var forwarded=event(USER,true,"forward-context","");
+        var forwardedTime=note.message.getTimeCreated().plusNanos(100_000_000);
+        when(forwarded.message.getTimeCreated()).thenReturn(forwardedTime);
+        var source=new ForwardSourceContextTest();
+        source.source(ForwardSourceContextTest.post(100,"元の資料"),List.of(ForwardSourceContextTest.post(99,"前の相談")),List.of(ForwardSourceContextTest.post(101,"後の結論")));
+        String guildId=note.guild.getId();
+        when(source.ref.getGuildId()).thenReturn(guildId);
+        when(forwarded.message.getMessageSnapshots()).thenReturn(List.of(MessageInputTest.snapshot("転送コピー")));
+        when(forwarded.message.getMessageReference()).thenReturn(source.ref);
+        when(note.guild.getGuildChannelById("channel")).thenReturn(source.channel);
+        when(note.guild.getSelfMember()).thenReturn(source.bot);
+        when(note.messageEvent.getMember().hasPermission(source.channel,net.dv8tion.jda.api.Permission.VIEW_CHANNEL,
+                net.dv8tion.jda.api.Permission.MESSAGE_HISTORY)).thenReturn(true);
+        var done=new CountDownLatch(1);
+        doAnswer(i->{done.countDown();return null;}).when(note.reply).queue(any(),any());
+        var history=new ChatHistory(directory.resolve("history"));
+        try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)) {
+            account(accounts);
+            try(var ai=new AiConversation(new AiAccess(directory,ROLE),note.controls,session,transport,
+                    new ResponseSettings(directory.resolve("mode.properties")),history,"guide")) {
+                ai.accept(note.messageEvent);ai.accept(forwarded.messageEvent);
+                assertTrue(done.await(5,TimeUnit.SECONDS));
+            }
+        }
+        verify(transport).respond(eq("access"),eq("chosen"),anyString(),anyList(),any(OpenAiTransport.Progress.class));
+        String json=ChatGptAccounts.JSON.writeValueAsString(captured.get());
+        assertTrue(json.contains("説明して"));assertTrue(json.contains("転送コピー"));
+        assertTrue(json.contains("前の相談"));assertTrue(json.contains("後の結論"));
+        String key=ChannelControlsTest.CHANNEL+"-"+UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        String persisted=ChatGptAccounts.JSON.writeValueAsString(history.load(key).turns);
+        assertTrue(persisted.contains("転送コピー"));assertFalse(persisted.contains("前の相談"));
+        verify(note.message).reply("answer");
+    }
+
     @org.junit.jupiter.params.ParameterizedTest
     @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
     void providerProgressIsClearedOnlyAfterDiscordOutput(boolean ng) throws Exception {
