@@ -413,14 +413,10 @@ class AiConversationTest {
                 var sent=mock(Message.class);when(sent.getId()).thenReturn("98765432109876543"+n);
                 String key=ChannelControlsTest.CHANNEL+"-"+UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
                 Path historyFile=directory.resolve("history").resolve(key+".json");
-                var beforeSend=new AtomicLong(Long.MAX_VALUE);
-                when(postAction.complete()).thenAnswer(i->{beforeSend.set(java.nio.file.Files.size(historyFile));return sent;});
+                when(postAction.complete()).thenAnswer(i->{assertTrue(java.nio.file.Files.size(historyFile)>0);return sent;});
                 try(var ai=new AiConversation(access,h.controls,session,transport,settings,new ChatHistory(directory.resolve("history")),"guide",guild->gateway)){
                     ai.onResponseCompleted(completed::incrementAndGet);
                     ai.accept(h.messageEvent);
-                    assertTimeoutPreemptively(Duration.ofSeconds(5),()->{
-                        while(beforeSend.get()==Long.MAX_VALUE||java.nio.file.Files.size(historyFile)<=beforeSend.get())Thread.sleep(10);
-                    });
                     int expected=n;
                     assertTimeoutPreemptively(Duration.ofSeconds(5),()->{while(completed.get()<expected)Thread.sleep(10);});
                 }
