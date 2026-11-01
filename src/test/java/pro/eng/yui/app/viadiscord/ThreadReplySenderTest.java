@@ -109,4 +109,27 @@ class ThreadReplySenderTest {
         java.nio.file.Files.writeString(directory.resolve("123.json"),"{\"turns\":[],\"ids\":[],\"nextPost\":42}");
         var saved=new ChatHistory(directory).load("123");assertEquals(42,saved.nextPost);assertTrue(saved.postMessages.isEmpty());
     }
+    @Test void sourcesFollowFinalPostAsUnnumberedMessageAndDoNotChangeNumberMap() throws Exception {
+        var saved=new ChatHistory.History();var bodies=new LinkedHashMap<String,String>();
+        var sourceAction=mock(MessageCreateAction.class,RETURNS_SELF);
+        var sent=mock(Message.class);when(sent.getId()).thenReturn("sources-id");when(sourceAction.complete()).thenReturn(sent);
+        String note="出典:\nhttps://example.com/source";when(channel.sendMessage(note)).thenReturn(sourceAction);
+        ThreadReplySender.send(source,reply("最後の本文。",List.of()),1,roles,saved,()->{},bodies::put,note);
+        var order=inOrder(channel,post,sourceAction);
+        order.verify(channel).sendMessage("2：案内人 <@&456789012345678901>\n確認します。");order.verify(post).complete();
+        order.verify(channel).sendMessage("3：案内人 <@&456789012345678901>\n最後の本文。");order.verify(post).complete();
+        order.verify(channel).sendMessage(note);order.verify(sourceAction).complete();
+        verify(sourceAction).setAllowedMentions(List.of());verify(sourceAction,never()).setMessageReference(anyString());
+        assertEquals(Set.of(1L,2L,3L),saved.postMessages.keySet());assertFalse(saved.postMessages.containsValue("sources-id"));
+        assertEquals(note,bodies.get("sources-id"));
+    }
+    @Test void longSourceListUsesSeparateAttachmentAndSourceFailureIsPropagated() throws Exception {
+        String note="出典:\n"+"https://example.com/long\n".repeat(100);
+        ThreadReplySender.send(source,reply("本文。",List.of()),1,roles,new ChatHistory.History(),()->{},(id,body)->{},note);
+        verify(channel).sendMessage("出典を添付しました。");verify(post).addFiles(any(net.dv8tion.jda.api.utils.FileUpload.class));
+        var failure=mock(MessageCreateAction.class,RETURNS_SELF);when(failure.complete()).thenThrow(new IllegalStateException());
+        when(channel.sendMessage("出典:\nhttps://example.com/source")).thenReturn(failure);
+        assertThrows(IllegalStateException.class,()->ThreadReplySender.send(source,reply("本文。",List.of()),1,roles,new ChatHistory.History(),()->{},(id,body)->{},"出典:\nhttps://example.com/source"));
+    }
+
 }

@@ -16,7 +16,7 @@ final class MessageFeedback implements OpenAiTransport.Progress, AutoCloseable {
     private String current;
     private List<String> sources=List.of();
     @Override public void sources(List<String> urls) {sources=List.copyOf(urls);}
-    String sourceNote() {return sources.isEmpty()?"":"\n\n出典:\n"+String.join("\n",sources);}
+    String sourceNote(String body) {return SourceNotes.format(sources,body);}
     private boolean closed, deferred;
     private final java.util.function.Consumer<MessageFeedback> cleared;
 
