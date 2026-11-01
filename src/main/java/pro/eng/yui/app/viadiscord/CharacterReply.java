@@ -67,12 +67,4 @@ record CharacterReply(String summary, List<CharacterSpec> characters, List<Post>
         return new CharacterReply(root.path("summary").asText().strip(), List.copyOf(used.values()), List.copyOf(posts));
     }
 
-    CharacterReply withSourceNote(String note) {
-        if(note.isEmpty())return this;
-        var displayed=new ArrayList<>(posts);
-        var last=displayed.getLast();
-        displayed.set(displayed.size()-1,new Post(last.character(),last.text()+note,last.references()));
-        return new CharacterReply(summary,characters,List.copyOf(displayed));
-    }
-
 }

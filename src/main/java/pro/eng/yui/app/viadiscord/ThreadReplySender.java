@@ -20,6 +20,10 @@ final class ThreadReplySender {
     }
     static void send(Message source, CharacterReply reply, long firstPost,
                      List<ResponseSettings.CharacterRole> roles, ChatHistory.History saved, Save save, SaveReply saveReply) throws IOException {
+        send(source,reply,firstPost,roles,saved,save,saveReply,"");
+    }
+    static void send(Message source, CharacterReply reply, long firstPost,
+                     List<ResponseSettings.CharacterRole> roles, ChatHistory.History saved, Save save, SaveReply saveReply,String sourceNote) throws IOException {
         String summaryBody=firstPost + ">> " + reply.summary();
         Message summary=source.reply(summaryBody)
                 .mentionRepliedUser(false).setAllowedMentions(List.of()).setSuppressedNotifications(true)
@@ -54,6 +58,13 @@ final class ThreadReplySender {
             saved.postMessages.put(number,sent.getId());
             save.run();
             saveReply.run(sent.getId(),text.toString());
+        }
+        if(!sourceNote.isEmpty()) {
+            var action=source.getChannel().sendMessage(sourceNote.length()<=2000?sourceNote:"出典を添付しました。");
+            action.setAllowedMentions(List.of());
+            if(sourceNote.length()>2000)action.addFiles(FileUpload.fromData(sourceNote.getBytes(StandardCharsets.UTF_8),"sources.txt"));
+            Message sent=action.complete();
+            saveReply.run(sent.getId(),sourceNote);
         }
     }
 }

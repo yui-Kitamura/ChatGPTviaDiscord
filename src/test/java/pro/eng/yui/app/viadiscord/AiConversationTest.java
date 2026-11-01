@@ -389,7 +389,8 @@ class AiConversationTest {
                 prompt.set(instructions);int n=calls.incrementAndGet();
                 progress.sources(List.of("https://example.com/source"));
                 assertTrue(ChatGptAccounts.JSON.valueToTree(turns).toString().contains("data:image/png;base64,AQID"));
-                return CharacterReplyTest.REPLY.replace("[4]",n==1?"[]":"[1]");
+                return CharacterReplyTest.REPLY.replace("[4]",n==1?"[]":"[1]")
+                        .replace("説明します。",n==1?"説明します。":"説明します。 https://example.com/source");
             }
         };
         var created=new AtomicInteger();var completed=new AtomicInteger();
@@ -412,18 +413,17 @@ class AiConversationTest {
                 var sent=mock(Message.class);when(sent.getId()).thenReturn("98765432109876543"+n);
                 String key=ChannelControlsTest.CHANNEL+"-"+UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
                 Path historyFile=directory.resolve("history").resolve(key+".json");
-                var beforeSend=new AtomicLong(Long.MAX_VALUE);
-                when(postAction.complete()).thenAnswer(i->{beforeSend.set(java.nio.file.Files.size(historyFile));return sent;});
+                when(postAction.complete()).thenAnswer(i->{assertTrue(java.nio.file.Files.size(historyFile)>0);return sent;});
                 try(var ai=new AiConversation(access,h.controls,session,transport,settings,new ChatHistory(directory.resolve("history")),"guide",guild->gateway)){
                     ai.onResponseCompleted(completed::incrementAndGet);
                     ai.accept(h.messageEvent);
-                    assertTimeoutPreemptively(Duration.ofSeconds(5),()->{
-                        while(beforeSend.get()==Long.MAX_VALUE||java.nio.file.Files.size(historyFile)<=beforeSend.get())Thread.sleep(10);
-                    });
+                    int expected=n;
+                    assertTimeoutPreemptively(Duration.ofSeconds(5),()->{while(completed.get()<expected)Thread.sleep(10);});
                 }
                 verify(h.message).reply(startsWith((2*n-1)+">> 説明を求めている。"));
                 verify(h.messageEvent.getChannel()).sendMessage(contains((2*n)+"：案内人 <@&456789012345678901>"));
-                verify(h.messageEvent.getChannel()).sendMessage(contains("出典:\nhttps://example.com/source"));
+                if(n==1)verify(h.messageEvent.getChannel()).sendMessage("出典:\nhttps://example.com/source");
+                else verify(h.messageEvent.getChannel(),never()).sendMessage("出典:\nhttps://example.com/source");
                 verify(postAction,never()).setMessageReference(anyString());
                 if(n==2)verify(h.messageEvent.getChannel()).sendMessage(contains("[>>1](https://discord.com/channels/"));
                 assertEquals(1,settings.characters().size());

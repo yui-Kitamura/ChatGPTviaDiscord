@@ -36,14 +36,5 @@ class CharacterReplyTest {
         assertTrue(instructions.contains("先頭レス番号: 5"));
         assertFalse(CharacterReply.instructions(new ResponseContext(ResponseMode.QA, List.of(known), List.of(known)), 5).contains("JSON オブジェクトだけ"));
     }
-    @org.junit.jupiter.api.Test void sourceNotePreservesSummarySpeakersAndReferences() {
-        var original=new CharacterReply("summary",List.of(),List.of(new CharacterReply.Post("guide","first",List.of()),new CharacterReply.Post("guide","last",List.of(1L))));
-        var noted=original.withSourceNote("\n\n出典:\nhttps://example.com/source");
-        assertEquals(original.summary(),noted.summary());assertEquals(original.characters(),noted.characters());
-        assertEquals(original.posts().getFirst(),noted.posts().getFirst());
-        assertEquals(List.of(1L),noted.posts().getLast().references());
-        assertEquals("last\n\n出典:\nhttps://example.com/source",noted.posts().getLast().text());
-        assertEquals("last",original.posts().getLast().text());
-    }
 
 }

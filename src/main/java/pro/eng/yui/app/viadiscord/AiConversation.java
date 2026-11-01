@@ -184,13 +184,15 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
                 input.set(input.size()-1,ChatTimestamps.turn("user",userContent,message.getTimeCreated()));
                 saved.turns=input;saved.turns.add(ChatTimestamps.turn("assistant",response,responseTime));batch.forEach(e->saved.ids.add(e.getMessage().getId()));
                 history.save(key,saved);
-                if(generated==null)feedback.reply(response+feedback.sourceNote(),responseCompleted,sent->{
-                    try {history.saveReply(key,sent.getId(),response);}
+                String sourceNote=feedback.sourceNote(generated==null?response:SourceNotes.body(generated));
+                String display=response+(sourceNote.isEmpty()?"":"\n\n"+sourceNote);
+                if(generated==null)feedback.reply(display,responseCompleted,sent->{
+                    try {history.saveReply(key,sent.getId(),display);}
                     catch(java.io.IOException error){FailureDiagnostics.log("REPLY_CONTEXT_SAVE",error,sent.getId());}
                 });
                 else {
-                    ThreadReplySender.send(message,generated.withSourceNote(feedback.sourceNote()),firstPost,roles,saved,()->history.save(key,saved),
-                            (id,body)->history.saveReply(key,id,body));
+                    ThreadReplySender.send(message,generated,firstPost,roles,saved,()->history.save(key,saved),
+                            (id,body)->history.saveReply(key,id,body),sourceNote);
                     responseCompleted.run();
                 }
             }catch(AttachmentInput.Unavailable error){FailureDiagnostics.log("ATTACHMENT",error);feedback.reply(error.getMessage());}
