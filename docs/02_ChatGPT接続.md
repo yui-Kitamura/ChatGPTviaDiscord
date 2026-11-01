@@ -2,7 +2,7 @@
 
 Bot共通のChatGPTアカウントを接続する。許可ロールを持つ人の発言に、そのアカウントのChatGPTプランを使って応答する。利用者ごとのChatGPTログインは不要。
 
-OpenAIが公開するOSS向け Sign in with ChatGPT と Responses API を使う。Codex CLI・Codexの認証ファイル・ChatGPTの内部APIは使わない。別途課金されるAPIキーへの自動切替もしない。公開案内のプラン利用対象は適格なPlus/Pro。Business Standardの利用枠へ同じ方式で接続できることは未確認。利用可否は、実際にログインしたアカウント・Workspace・OpenAI側のポリシーによる。
+回答生成はOpenAIが公開するOSS向け Sign in with ChatGPT と Responses API を使う。生成にはCodex CLI・Codexの認証ファイル・ChatGPTの内部APIを使わない。別途課金されるAPIキーへの自動切替もしない。任意の利用枠照会だけは、別途ログインしたCodex App Serverとの[試行連携](03_Codex利用枠照会.md)を有効にできる。公開案内のプラン利用対象は適格なPlus/Pro。Business Standardの利用枠へ同じ方式で接続できることは未確認。利用可否は、実際にログインしたアカウント・Workspace・OpenAI側のポリシーによる。
 
 ## 先に行うこと
 

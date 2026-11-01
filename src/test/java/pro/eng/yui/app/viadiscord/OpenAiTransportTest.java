@@ -9,6 +9,7 @@ import java.util.*;
 import java.util.concurrent.atomic.*;
 import org.junit.jupiter.api.Test;
 
+@org.junit.jupiter.api.extension.ExtendWith(AttachmentHttpFixture.class)
 class OpenAiTransportTest {
     OpenAiTransport transport(HttpServer server){var uri=URI.create("http://127.0.0.1:"+server.getAddress().getPort()+"/");return new OpenAiTransport(Duration.ofSeconds(2),uri.resolve("token"),uri.resolve("jwks"),uri,uri.resolve("revoke"));}
     @Test void streamsTextAndRequiresCompletedWithSupportedFieldsOnly() throws Exception {
@@ -19,13 +20,71 @@ class OpenAiTransportTest {
             e.getResponseHeaders().set("Content-Type","text/event-stream");e.sendResponseHeaders(200,data.length);e.getResponseBody().write(data);e.close();
         });server.start();
         try {
-            assertEquals("こんにちは",transport(server).respond("secret","available-model","guide",List.of(Map.of("role","user","content","hello"))));
+            Object input=AttachmentInput.content("hello",List.of(
+                    AttachmentInputTest.attachment("a.png","image/png",new byte[]{1,2,3}),
+                    AttachmentInputTest.attachment("a.pdf","application/pdf",new byte[]{4,5,6})));
+            assertEquals("こんにちは",transport(server).respond("secret","available-model","guide",List.of(ChatTimestamps.turn("user",input,java.time.OffsetDateTime.parse("2026-10-30T18:02:03Z")))));
             var r=request.get();assertFalse(r.path("store").asBoolean());assertTrue(r.path("stream").asBoolean());assertTrue(r.path("input").isArray());
             assertEquals("web_search",r.path("tools").get(0).path("type").asText());
             assertTrue(r.path("tools").get(0).path("external_web_access").asBoolean());
             assertEquals("auto",r.path("tool_choice").asText());
             assertEquals(Set.of("model","instructions","input","store","stream","tools","tool_choice"),toSet(r.fieldNames()));
+            var content=r.path("input").get(0).path("content");
+            assertEquals("[発言日時: 2026-10-31 03:02:03 +09:00 JST]\n",content.get(0).path("text").asText());
+            assertEquals("hello",content.get(1).path("text").asText());
+            assertEquals(Set.of("role","content"),toSet(r.path("input").get(0).fieldNames()));
+            assertEquals("data:image/png;base64,AQID",content.get(2).path("image_url").asText());
+            assertEquals("data:application/pdf;base64,BAUG",content.get(3).path("file_data").asText());
         }finally{server.stop(0);}
+    }
+    @Test void reportsReceivingBeforeTheStreamCompletes() throws Exception {
+        var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+        var receiving=new java.util.concurrent.CountDownLatch(1);
+        var stages=new java.util.concurrent.CopyOnWriteArrayList<String>();
+        server.createContext("/responses",e->{
+            e.getRequestBody().readAllBytes();e.sendResponseHeaders(200,0);
+            e.getResponseBody().write("data: {\"type\":\"response.output_text.delta\",\"delta\":\"answer\"}\n\n".getBytes(StandardCharsets.UTF_8));
+            e.getResponseBody().flush();
+            try {if(!receiving.await(1,java.util.concurrent.TimeUnit.SECONDS))throw new java.io.IOException("Receiving callback missing");}
+            catch(InterruptedException failure){Thread.currentThread().interrupt();throw new java.io.IOException(failure);}
+            e.getResponseBody().write("data: {\"type\":\"response.completed\"}\n\n".getBytes(StandardCharsets.UTF_8));e.close();
+        });server.start();
+        try {
+            var progress=new OpenAiTransport.Progress() {
+                public void sent(){stages.add("sent");}
+                public void receiving(){stages.add("receiving");receiving.countDown();}
+                public void failed(){stages.add("failed");}
+            };
+            assertEquals("answer",transport(server).respond("secret","m","i",List.of(),progress));
+            assertEquals(List.of("sent","receiving"),stages);
+        } finally {server.stop(0);}
+    }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings={"http","failed","incomplete","refusal","malformed"})
+    void ngResponseNeverReportsNormalReceiving(String kind) throws Exception {
+        var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
+        var stages=new ArrayList<String>();
+        server.createContext("/responses",e->{
+            e.getRequestBody().readAllBytes();
+            String body=switch(kind) {
+                case "http" -> "{\"error\":{\"code\":\"rate_limit_exceeded\"}}";
+                case "failed" -> "data: {\"type\":\"response.failed\"}\n\n";
+                case "incomplete" -> "data: {\"type\":\"response.incomplete\"}\n\n";
+                case "refusal" -> "data: {\"type\":\"response.refusal.delta\",\"delta\":\"refused\"}\n\ndata: {\"type\":\"response.completed\"}\n\n";
+                default -> "data: invalid-json\n\n";
+            };
+            byte[] data=body.getBytes(StandardCharsets.UTF_8);e.sendResponseHeaders(kind.equals("http")?429:200,data.length);e.getResponseBody().write(data);e.close();
+        });server.start();
+        try {
+            var progress=new OpenAiTransport.Progress() {
+                public void sent(){stages.add("sent");}
+                public void receiving(){stages.add("receiving");}
+                public void failed(){stages.add("failed");}
+            };
+            if(kind.equals("refusal"))assertEquals("refused",transport(server).respond("secret","m","i",List.of(),progress));
+            else assertThrows(java.io.IOException.class,()->transport(server).respond("secret","m","i",List.of(),progress));
+            assertEquals(List.of("sent","failed"),stages);
+        } finally {server.stop(0);}
     }
     @Test void webToolEventsPreserveTextAndCollectOnlyValidCitationsAfterCompletion() throws Exception {
         var server=HttpServer.create(new InetSocketAddress("127.0.0.1",0),0);
@@ -49,9 +108,11 @@ class OpenAiTransportTest {
             e.sendResponseHeaders(200,data.length);e.getResponseBody().write(data);e.close();
         });server.start();
         try {
-            var answer=transport(server).respondAnswer("secret","m","guide",List.of());
-            assertEquals("answer",answer.text());
-            assertEquals(List.of("https://example.com/source","https://example.com/other"),answer.sources());
+            var urls=new AtomicReference<List<String>>();
+            var progress=new OpenAiTransport.Progress(){public void sources(List<String> sources){urls.set(sources);}};
+            var answer=transport(server).respond("secret","m","guide",List.of(),progress);
+            assertEquals("answer",answer);
+            assertEquals(List.of("https://example.com/source","https://example.com/other"),urls.get());
         }finally{server.stop(0);}
     }
     @Test void unsupportedWebSearchIsReportedWithoutRetryingWithoutTools() throws Exception {
@@ -62,7 +123,7 @@ class OpenAiTransportTest {
             e.sendResponseHeaders(400,data.length);e.getResponseBody().write(data);e.close();
         });server.start();
         try {
-            var error=assertThrows(ChatGptException.class,()->transport(server).respondAnswer("secret","m","guide",List.of()));
+            var error=assertThrows(ChatGptException.class,()->transport(server).respond("secret","m","guide",List.of()));
             assertEquals("unsupported_tool",error.code);assertFalse(error.getMessage().contains("private"));assertEquals(1,calls.get());
         }finally{server.stop(0);}
     }

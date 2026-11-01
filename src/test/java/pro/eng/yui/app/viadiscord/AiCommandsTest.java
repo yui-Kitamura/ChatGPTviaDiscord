@@ -26,7 +26,7 @@ class AiCommandsTest {
         when(guild.getId()).thenReturn(GUILD);when(event.getGuild()).thenReturn(guild);when(event.isFromGuild()).thenReturn(true);
         when(event.getName()).thenReturn("gvd");when(event.getSubcommandName()).thenReturn(sub);when(event.getMember()).thenReturn(member);var user=member.getUser();when(event.getUser()).thenReturn(user);
         var defer=mock(ReplyCallbackAction.class,RETURNS_SELF);when(event.deferReply(true)).thenReturn(defer);
-        doAnswer(i->{((Consumer<InteractionHook>)i.getArgument(0)).accept(hook);return null;}).when(defer).queue(any(Consumer.class));
+        doAnswer(i->{((Consumer<InteractionHook>)i.getArgument(0)).accept(hook);return null;}).when(defer).queue(any(Consumer.class),any(Consumer.class));
         var reply=mock(ReplyCallbackAction.class,RETURNS_SELF);when(event.reply(anyString())).thenReturn(reply);
         return event;
     }
@@ -41,6 +41,21 @@ class AiCommandsTest {
         listener.onSlashCommandInteraction(event);assertEquals(Set.of(ROLE),access.roleIds());
         when(event.getSubcommandName()).thenReturn("reject");listener.onSlashCommandInteraction(event);assertTrue(access.roleIds().isEmpty());
         assertTrue(new AiAccess(directory,"").roleIds().isEmpty());
+    }
+    @Test void failedRoleSaveLogsInteractionAndRetainsPreviousAccess() throws Exception {
+        var access=new AiAccess(directory,"");
+        java.nio.file.Files.createDirectory(directory.resolve("ai-role.txt"));
+        var hook=hook();var member=AiAccessTest.member(false);
+        when(member.hasPermission(Permission.MANAGE_SERVER)).thenReturn(true);
+        var event=event("accept",member,hook);when(event.getId()).thenReturn("1566000639157473370");
+        var role=mock(Role.class);when(role.getId()).thenReturn(ROLE);
+        var option=mock(OptionMapping.class);when(option.getAsRole()).thenReturn(role);when(event.getOption("role")).thenReturn(option);
+        var listener=commands(access);
+        try {
+            String log=FailureDiagnosticsTest.capture(()->listener.onSlashCommandInteraction(event));
+            assertTrue(log.contains("operation=ACCESS_SAVE source_id=1566000639157473370"));
+            assertTrue(access.roleIds().isEmpty());verify(hook).editOriginal(contains("保存できなかった"));
+        } finally {listener.onShutdown(null);}
     }
     @Test void normalAuthorizedMembersCannotReplaceSharedChatGptConnection() throws Exception {
         var access=new AiAccess(directory,ROLE);var member=AiAccessTest.member(false,ROLE);var event=event("auth",member,hook());

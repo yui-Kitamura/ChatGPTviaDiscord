@@ -7,19 +7,19 @@ import org.junit.jupiter.api.Test;
 class CharacterReplyTest {
     private final ResponseContext context = new ResponseContext(ResponseMode.THREAD, List.of(), List.of());
     static final String REPLY = """
-            {"characters":[{"name":"案内人","persona":"落ち着いた説明役"}],
+            {"summary":"説明を求めている。","characters":[{"name":"案内人","persona":"落ち着いた説明役"}],
              "posts":[{"character":"案内人","text":"説明します。","references":[4]}]}
             """;
 
     @Test void validatesStructuredSpeakersAndUsesBotAssignedNumbering() throws Exception {
         var result = CharacterReply.parse(REPLY, context, 5);
         assertEquals(new CharacterSpec("案内人", "落ち着いた説明役"), result.characters().getFirst());
-        assertTrue(result.display(5).contains("5：名無しの案内人\n>>4"));
-        assertTrue(result.display(5).startsWith("AI による掛け合い"));
+        assertEquals("説明を求めている。",result.summary());
+        assertEquals(List.of(4L),result.posts().getFirst().references());
     }
 
     @Test void rejectsMalformedUnknownSpeakersAndFutureReferencesBeforeRoleCreation() {
-        for (String invalid : List.of("ordinary answer", REPLY + "{}", REPLY.replace("[4]", "[5]"),
+        for (String invalid : List.of("ordinary answer", REPLY + "{}", REPLY.replace("説明を求めている。", ""), REPLY.replace("summary", "missing"), REPLY.replace("[4]", "[5]"),
                 REPLY.replace("[4]", "[-1]"), REPLY.replace("[4]", "[4.1]"),
                 REPLY.replace("\"character\":\"案内人\"", "\"character\":\"unknown\""))) {
             assertThrows(Exception.class, () -> CharacterReply.parse(invalid, context, 5));
@@ -36,4 +36,14 @@ class CharacterReplyTest {
         assertTrue(instructions.contains("先頭レス番号: 5"));
         assertFalse(CharacterReply.instructions(new ResponseContext(ResponseMode.QA, List.of(known), List.of(known)), 5).contains("JSON オブジェクトだけ"));
     }
+    @org.junit.jupiter.api.Test void sourceNotePreservesSummarySpeakersAndReferences() {
+        var original=new CharacterReply("summary",List.of(),List.of(new CharacterReply.Post("guide","first",List.of()),new CharacterReply.Post("guide","last",List.of(1L))));
+        var noted=original.withSourceNote("\n\n出典:\nhttps://example.com/source");
+        assertEquals(original.summary(),noted.summary());assertEquals(original.characters(),noted.characters());
+        assertEquals(original.posts().getFirst(),noted.posts().getFirst());
+        assertEquals(List.of(1L),noted.posts().getLast().references());
+        assertEquals("last\n\n出典:\nhttps://example.com/source",noted.posts().getLast().text());
+        assertEquals("last",original.posts().getLast().text());
+    }
+
 }

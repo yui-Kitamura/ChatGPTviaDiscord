@@ -14,6 +14,7 @@ final class AuthDiagnostics {
             "invalid_grant", "invalid_scope", "unauthorized_client", "unsupported_response_type",
             "unsupported_grant_type", "server_error", "temporarily_unavailable", "request_failed");
     static void failure(Stage stage,Throwable failure,String callbackError) {
+        FailureDiagnostics.log("AUTH_"+stage,failure);
         String reason=failure instanceof OpenAiIdentity.ValidationFailure validation ? validation.reason.name() : "UNSPECIFIED";
         int status=failure instanceof ChatGptException upstream ? upstream.status : 0;
         String code=failure instanceof ChatGptException upstream ? upstream.code : callbackError;
