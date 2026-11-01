@@ -58,12 +58,49 @@ class AiConversationTest {
             assertEquals("answer",new ChatHistory(directory.resolve("history")).replyBody(key,"sent"));
         }
     }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({"false,false", "false,true", "true,false", "true,true"})
+    void skippedChannelMentionsCompleteAiResponse(boolean threadMode, boolean roleMention) throws Exception {
+        var transport=mock(OpenAiTransport.class);
+        when(transport.respond(anyString(),anyString(),anyString(),anyList(),any(OpenAiTransport.Progress.class)))
+                .thenReturn(threadMode?CharacterReplyTest.REPLY.replace("[4]","[]"):"answer");
+        try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)) {
+            account(accounts);
+            var h=event(USER,true,"mentioned-post","question");
+            h.controls.update(ChannelControlsTest.GUILD,"skipch",ChannelControlsTest.CHANNEL);
+            if(roleMention)h.mentionRole("GvD: 案内人");else h.mentionBot("<@"+GvdListenerTest.BOT+">");
+            var settings=new ResponseSettings(directory.resolve("response.properties"));
+            if(threadMode)settings.setMode(ChannelControlsTest.CHANNEL,ResponseMode.THREAD);
+            var channel=h.messageEvent.getChannel();
+            when(h.message.getChannel()).thenReturn(channel);when(h.message.getGuild()).thenReturn(h.guild);
+            var post=mock(net.dv8tion.jda.api.requests.restaction.MessageCreateAction.class,RETURNS_SELF);
+            var sent=mock(Message.class);when(sent.getId()).thenReturn("sent");
+            when(channel.sendMessage(anyString())).thenReturn(post);when(post.complete()).thenReturn(sent);
+            doAnswer(i->{i.<java.util.function.Consumer<Message>>getArgument(0).accept(sent);return null;})
+                    .when(h.reply).queue(any(),any());
+            var gateway=new CharacterRoles.RoleGateway(){public boolean exists(String id){return true;}public String create(String name){return "456789012345678901";}};
+            var done=new CountDownLatch(1);
+            var history=new ChatHistory(directory.resolve("history"));
+            try(var ai=new AiConversation(new AiAccess(directory,ROLE),h.controls,session,transport,settings,history,"guide",guild->gateway)) {
+                ai.onResponseCompleted(done::countDown);
+                new GvdListener(h.controls,ai).onMessageReceived(h.messageEvent);
+                assertTrue(done.await(5,TimeUnit.SECONDS));
+            }
+            verify(transport).respond(anyString(),anyString(),anyString(),anyList(),any(OpenAiTransport.Progress.class));
+            if(threadMode)verify(channel).sendMessage(contains("案内人"));else verify(h.message).reply("answer");
+            String key=ChannelControlsTest.CHANNEL+"-"+UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            assertEquals(List.of("mentioned-post"),history.load(key).ids);
+        }
+    }
+
     void account(ChatGptAccounts accounts) throws Exception {
         var a=new ChatGptAccounts.Account();a.clientId="oaiapp_shared";a.subject="owner";a.accessToken="access";a.refreshToken="refresh";
         a.scope="chatgpt.tokens.use.direct";a.expiresAt=Instant.now().plusSeconds(3600).getEpochSecond();a.model="chosen";
         accounts.put(ChatGptAccounts.key(ChannelControlsTest.GUILD,"default"),a,true);
     }
-    @Test @SuppressWarnings("unchecked") void malformedThreadReplyCanBeRetriedOnceByItsAuthorizedAuthor() throws Exception {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
+    @SuppressWarnings("unchecked") void malformedThreadReplyCanBeRetriedOnceByItsAuthorizedAuthor(boolean skippedMentionRetry) throws Exception {
         var calls=new AtomicInteger();var release=new CountDownLatch(1);var started=new CountDownLatch(1);
         var transport=new OpenAiTransport(Duration.ofSeconds(3)){
             @Override String respond(String token,String model,String instructions,List<Map<String,Object>> turns,OpenAiTransport.Progress progress) {
@@ -107,6 +144,7 @@ class AiConversationTest {
                 h.controls.update(ChannelControlsTest.GUILD,"skipch",ChannelControlsTest.CHANNEL);listener.onButtonInteraction(click);h.controls.update(ChannelControlsTest.GUILD,"readch",ChannelControlsTest.CHANNEL);
                 when(click.getMessageId()).thenReturn("other-reply");listener.onButtonInteraction(click);when(click.getMessageId()).thenReturn("error-reply");
                 verify(click,never()).deferReply(anyBoolean());assertEquals(1,calls.get());
+                if(skippedMentionRetry){h.mentionRole("GvD: 案内人");h.controls.update(ChannelControlsTest.GUILD,"skipch",ChannelControlsTest.CHANNEL);}
                 var deferred=mock(ReplyCallbackAction.class);when(click.deferReply(true)).thenReturn(deferred);
                 var hook=mock(InteractionHook.class);var edit=mock(WebhookMessageEditAction.class,RETURNS_SELF);when(hook.editOriginal(anyString())).thenReturn(edit);
                 // An acknowledgement failure leaves the same button usable.

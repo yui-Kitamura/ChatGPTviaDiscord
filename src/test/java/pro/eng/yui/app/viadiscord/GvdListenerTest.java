@@ -31,6 +31,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 class GvdListenerTest {
+    static final String BOT = "999999999999999999";
     @TempDir Path directory;
     ChannelControls controls;
     GvdListener listener;
@@ -68,6 +69,14 @@ class GvdListenerTest {
         when(messageEvent.getChannelType()).thenReturn(ChannelType.TEXT);
         when(messageEvent.getMessage()).thenReturn(message);
         when(messageEvent.getAuthor()).thenReturn(user);
+        var mentions = mock(net.dv8tion.jda.api.entities.Mentions.class);
+        when(message.getMentions()).thenReturn(mentions);
+        when(message.getContentRaw()).thenReturn("");
+        var jda = mock(net.dv8tion.jda.api.JDA.class);
+        var self = mock(net.dv8tion.jda.api.entities.SelfUser.class);
+        when(self.getId()).thenReturn(BOT);
+        when(jda.getSelfUser()).thenReturn(self);
+        when(messageEvent.getJDA()).thenReturn(jda);
     }
 
     @Test void humanMessageGetsEyesAndAnUnmentionedSilentReply() {
@@ -94,6 +103,75 @@ class GvdListenerTest {
         listener.onMessageReceived(messageEvent);
         verify(message, never()).addReaction(any(Emoji.class));
         verify(message, never()).reply(anyString());
+    }
+
+    void mentionBot(String token) {
+        var self = messageEvent.getJDA().getSelfUser();
+        when(message.getMentions().getUsers()).thenReturn(java.util.List.of(self));
+        when(message.getContentRaw()).thenReturn(token + " question");
+    }
+
+    void mentionRole(String name) {
+        var role = mock(net.dv8tion.jda.api.entities.Role.class);
+        when(role.getName()).thenReturn(name);
+        when(message.getMentions().getRoles()).thenReturn(java.util.List.of(role));
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"<@999999999999999999>", "<@!999999999999999999>", "GvD: 案内人", "GvD: 地図観測班"})
+    void mentionsOverrideSkipAndReachConversation(String mention) throws Exception {
+        controls.update(GUILD, "skipch", CHANNEL);
+        if (mention.startsWith("GvD:")) mentionRole(mention); else mentionBot(mention);
+        Consumer<MessageReceivedEvent> conversation = mock(Consumer.class);
+        new GvdListener(controls, conversation).onMessageReceived(messageEvent);
+        verify(conversation).accept(messageEvent);
+        // The mention does not change the persisted skip policy for later posts.
+        assertFalse(controls.shouldRespond(GUILD, CHANNEL, null, false, false, MessageType.DEFAULT));
+    }
+
+    @Test void mentionOverridesParentAndThreadSkip() throws Exception {
+        var thread = mock(net.dv8tion.jda.api.entities.channel.concrete.ThreadChannel.class);
+        var parent = mock(net.dv8tion.jda.api.entities.channel.unions.IThreadContainerUnion.class);
+        when(parent.getId()).thenReturn(CHANNEL);
+        when(thread.getParentChannel()).thenReturn(parent);
+        when(messageEvent.getChannelType()).thenReturn(ChannelType.GUILD_PUBLIC_THREAD);
+        when(messageEvent.getChannel().getId()).thenReturn(THREAD);
+        when(messageEvent.getChannel().asThreadChannel()).thenReturn(thread);
+        controls.update(GUILD, "skipch", CHANNEL);
+        mentionBot("<@" + BOT + ">");
+        assertTrue(controls.shouldRespond(messageEvent));
+        controls.update(GUILD, "readch", CHANNEL);
+        controls.update(GUILD, "skipch", THREAD);
+        assertTrue(controls.shouldRespond(messageEvent));
+    }
+
+    @Test void unrelatedMentionsAndImplicitReplyDoNotOverrideSkip() throws Exception {
+        controls.update(GUILD, "skipch", CHANNEL);
+        mentionRole("Other GvD: 案内人");
+        when(message.getContentRaw()).thenReturn("@everyone @here GvD: 案内人 <@123456789012345678>");
+        assertFalse(controls.shouldRespond(messageEvent));
+        mentionBot("");
+        when(message.getType()).thenReturn(MessageType.INLINE_REPLY);
+        assertFalse(controls.shouldRespond(messageEvent));
+    }
+
+    @Test void mentionsDoNotBypassExcludedSources() throws Exception {
+        controls.update(GUILD, "skipch", CHANNEL);
+        mentionBot("<@" + BOT + ">");
+        mentionRole("GvD: 案内人");
+        when(user.isBot()).thenReturn(true);
+        assertFalse(controls.shouldRespond(messageEvent));
+        when(user.isBot()).thenReturn(false);
+        when(message.isWebhookMessage()).thenReturn(true);
+        assertFalse(controls.shouldRespond(messageEvent));
+        when(message.isWebhookMessage()).thenReturn(false);
+        when(message.getType()).thenReturn(MessageType.GUILD_MEMBER_JOIN);
+        assertFalse(controls.shouldRespond(messageEvent));
+        when(message.getType()).thenReturn(MessageType.DEFAULT);
+        when(guild.getId()).thenReturn(OTHER);
+        assertFalse(controls.shouldRespond(messageEvent));
+        when(messageEvent.isFromGuild()).thenReturn(false);
+        assertFalse(controls.shouldRespond(messageEvent));
     }
 
     @Test void botWebhookAndSystemMessagesNeverProduceSideEffects() {
