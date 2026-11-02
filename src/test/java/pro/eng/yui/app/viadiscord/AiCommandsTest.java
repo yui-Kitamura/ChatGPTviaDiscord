@@ -32,6 +32,28 @@ class AiCommandsTest {
     }
     @SuppressWarnings("unchecked") InteractionHook hook(){var hook=mock(InteractionHook.class);var edit=mock(WebhookMessageEditAction.class,RETURNS_SELF);when(hook.editOriginal(anyString())).thenReturn(edit);return hook;}
     AiCommands commands(AiAccess access){return new AiCommands(GUILD,new AiConfig(true,"",1455,Duration.ofSeconds(30)),access,null,null,null);}
+    @Test void visitorChannelRequiresManagerAndPersistsOnlyValidGuildChannels() throws Exception {
+        var access=new AiAccess(directory,"");var hook=hook();var member=VisitorAccessTest.visitor();
+        var event=event("visitorch",member,hook);
+        var channel=mock(net.dv8tion.jda.api.entities.channel.unions.GuildChannelUnion.class);
+        var guild=event.getGuild();var userId=event.getUser().getId();
+        when(channel.getId()).thenReturn(ChannelControlsTest.CHANNEL);when(channel.getGuild()).thenReturn(guild);
+        when(channel.getType()).thenReturn(net.dv8tion.jda.api.entities.channel.ChannelType.TEXT);
+        var option=mock(OptionMapping.class);when(option.getAsChannel()).thenReturn(channel);when(event.getOption("ch")).thenReturn(option);
+        when(guild.getMemberById(userId)).thenReturn(member);
+        var listener=commands(access);
+        try {
+            listener.onSlashCommandInteraction(event);verify(event,never()).deferReply(true);
+            when(member.hasPermission(Permission.MANAGE_SERVER)).thenReturn(true);
+            when(channel.getType()).thenReturn(net.dv8tion.jda.api.entities.channel.ChannelType.CATEGORY);
+            listener.onSlashCommandInteraction(event);verify(event,never()).deferReply(true);
+            when(channel.getType()).thenReturn(net.dv8tion.jda.api.entities.channel.ChannelType.TEXT);
+            listener.onSlashCommandInteraction(event);verify(hook).editOriginal(contains("をvisitorチャンネルに設定"));
+            assertTrue(java.nio.file.Files.readString(directory.resolve("ai-visitor.properties")).contains(ChannelControlsTest.CHANNEL));
+            java.nio.file.Files.delete(directory.resolve("ai-visitor.properties"));java.nio.file.Files.createDirectory(directory.resolve("ai-visitor.properties"));
+            listener.onSlashCommandInteraction(event);verify(hook).editOriginal(contains("保存できなかった"));
+        } finally {listener.onShutdown(null);}
+    }
     @Test void onlyServerManagersCanAddAndRemoveAcceptedRoles() throws Exception {
         var access=new AiAccess(directory,"");var hook=hook();var member=AiAccessTest.member(false);var listener=commands(access);
         var event=event("accept",member,hook);var role=mock(Role.class);when(role.getId()).thenReturn(ROLE);

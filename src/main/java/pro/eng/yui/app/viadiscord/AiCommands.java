@@ -21,8 +21,9 @@ final class AiCommands extends ListenerAdapter {
     @Override public void onSlashCommandInteraction(SlashCommandInteractionEvent event) {
         if(!"gvd".equals(event.getName())||event.getUser().isBot())return;
         String sub=event.getSubcommandName();
-        if(!Set.of("auth","model","accept","reject").contains(Objects.toString(sub,"")))return;
+        if(!Set.of("auth","model","accept","reject","visitorch").contains(Objects.toString(sub,"")))return;
         if(!event.isFromGuild()||!guild.equals(event.getGuild().getId())){event.reply("このサーバーでは利用できません。").setEphemeral(true).queue();return;}
+        if("visitorch".equals(sub)){visitorChannel(event);return;}
         if("accept".equals(sub)||"reject".equals(sub)){roles(event,sub);return;}
         if(!config.enabled()||!access.permits(event.getMember())){
             event.reply(config.enabled()?"AIの利用には許可ロールが必要です。":"ChatGPT接続は無効です。VPSでCHATGPT_ENABLED=trueと必要なGateway Intentを設定してください。").setEphemeral(true).queue();return;
@@ -59,6 +60,29 @@ final class AiCommands extends ListenerAdapter {
                 catch(Exception e){FailureDiagnostics.log("AUTH_MODEL_COMMAND",e,event.getId());say(hook,"処理を完了できませんでした。設定と接続を確認して再実行してください。");}
             });}catch(RejectedExecutionException e){FailureDiagnostics.log("AUTH_MODEL_QUEUE",e,event.getId());say(hook,"処理が混み合っています。後で再実行してください。");}
         },error->FailureDiagnostics.log("AUTH_MODEL_ACK",error,event.getId()));
+    }
+    private void visitorChannel(SlashCommandInteractionEvent event) {
+        if(event.getMember()==null||!event.getMember().hasPermission(Permission.MANAGE_SERVER)) {
+            event.reply("visitorチャンネルの変更にはサーバー管理権限が必要です。").setEphemeral(true).queue();return;
+        }
+        var option=event.getOption("ch");
+        if(option==null) {event.reply("対象チャンネルを指定してください。").setEphemeral(true).queue();return;}
+        var channel=option.getAsChannel();
+        if(!guild.equals(channel.getGuild().getId())||!channel.getType().isMessage()) {
+            event.reply("対象サーバーのメッセージを投稿できるチャンネルを指定してください。").setEphemeral(true).queue();return;
+        }
+        event.deferReply(true).queue(hook->{
+            var current=event.getGuild().getMemberById(event.getUser().getId());
+            if(current==null||!current.hasPermission(Permission.MANAGE_SERVER)) {
+                say(hook,"サーバー管理権限がなくなったため処理を中止しました。");return;
+            }
+            try {
+                access.visitors.setChannel(channel.getId());
+                say(hook,"<#"+channel.getId()+"> をvisitorチャンネルに設定しました。GvDvisitor ロールの人はBot・生成キャラロールへの明示メンションでAIを呼べます（1人60秒に1回）。");
+            } catch(java.io.IOException e) {
+                FailureDiagnostics.log("VISITOR_SAVE",e,event.getId());say(hook,"保存できなかったため、visitor設定を変更していません。");
+            }
+        },error->FailureDiagnostics.log("VISITOR_ACK",error,event.getId()));
     }
     private static String keyFor(String user,String label){return ChatGptAccounts.key(user,label);}
     private void roles(SlashCommandInteractionEvent event,String sub) {

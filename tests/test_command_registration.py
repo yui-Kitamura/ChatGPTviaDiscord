@@ -31,7 +31,7 @@ class CommandRegistrationTest(unittest.TestCase):
         payload = json.loads(requests[1].data)
         self.assertEqual([0], payload['contexts'])
         self.assertEqual([0], payload['integration_types'])
-        self.assertEqual(['skipch', 'readch', 'mode', 'accept', 'reject', 'auth', 'model', 'trash', 'limit'], [item['name'] for item in payload['options']])
+        self.assertEqual(['skipch', 'readch', 'mode', 'accept', 'reject', 'auth', 'model', 'trash', 'visitorch', 'limit'], [item['name'] for item in payload['options']])
         limit = next(item for item in payload['options'] if item['name'] == 'limit')
         self.assertEqual(1, limit['type'])
         self.assertFalse(limit.get('options'))
@@ -50,6 +50,10 @@ class CommandRegistrationTest(unittest.TestCase):
         self.assertEqual(3, title['type'])
         self.assertFalse(title['required'])
         self.assertEqual(100, title['max_length'])
+
+    def test_visitor_channel_requires_a_channel(self):
+        visitor = next(item for item in module.command_definition()['options'] if item['name'] == 'visitorch')
+        self.assertEqual([{'type': 7, 'name': 'ch', 'description': '対象チャンネル', 'required': True}], visitor['options'])
 
     def test_accept_is_optional_and_reject_requires_a_role(self):
         by_name = {item['name']: item for item in module.command_definition()['options']}
