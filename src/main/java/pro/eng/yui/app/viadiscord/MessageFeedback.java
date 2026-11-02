@@ -1,13 +1,11 @@
 package pro.eng.yui.app.viadiscord;
 
-import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
 import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.emoji.Emoji;
 import net.dv8tion.jda.api.requests.RestAction;
-import net.dv8tion.jda.api.utils.FileUpload;
 
 /** Per-message progress; serializes REST actions without delaying AI or Discord output. */
 final class MessageFeedback implements OpenAiTransport.Progress, AutoCloseable {
@@ -64,18 +62,28 @@ final class MessageFeedback implements OpenAiTransport.Progress, AutoCloseable {
     }
     void reply(String text,Runnable completed,java.util.function.Consumer<Message> delivered,
                net.dv8tion.jda.api.components.MessageTopLevelComponent... components) {
-        var action=message.reply(text.length()<=1900?text:"回答を添付しました。")
-                .mentionRepliedUser(false).setAllowedMentions(List.of())
-                .setSuppressedNotifications(true).failOnInvalidReply(true);
-        if(text.length()>1900)action.addFiles(FileUpload.fromData(text.getBytes(StandardCharsets.UTF_8),"response.txt"));
-        if(components.length>0)action.addComponents(components);
         deferred=true;
+        sendChunks(DiscordText.split(text),0,completed,delivered,components);
+    }
+    private void sendChunks(List<String> chunks,int index,Runnable completed,java.util.function.Consumer<Message> delivered,
+                            net.dv8tion.jda.api.components.MessageTopLevelComponent... components) {
         try {
-            action.queue(sent->{try {delivered.accept(sent);completed.run();} finally {clear();}},failure->{
-                FailureDiagnostics.log("AI_SEND",failure,message.getId());
-                clear();
+            var action=message.reply(chunks.get(index))
+                    .mentionRepliedUser(false).setAllowedMentions(List.of())
+                    .setSuppressedNotifications(true).failOnInvalidReply(true);
+            if(index==chunks.size()-1 && components.length>0)action.addComponents(components);
+            action.queue(sent->{
+                try {
+                    delivered.accept(sent);
+                    if(index+1<chunks.size())sendChunks(chunks,index+1,completed,delivered,components);
+                    else {try {completed.run();} finally {clear();}}
+                } catch(RuntimeException failure) {
+                    FailureDiagnostics.log("AI_SEND",failure,message.getId());clear();
+                }
+            },failure->{
+                FailureDiagnostics.log("AI_SEND",failure,message.getId());clear();
             });
-        } catch(RuntimeException failure) {FailureDiagnostics.log("AI_SEND",failure,message.getId());deferred=false;throw failure;}
+        } catch(RuntimeException failure) {FailureDiagnostics.log("AI_SEND",failure,message.getId());deferred=false;clear();throw failure;}
     }
     @Override public void close() {if(!deferred)clear();}
 }

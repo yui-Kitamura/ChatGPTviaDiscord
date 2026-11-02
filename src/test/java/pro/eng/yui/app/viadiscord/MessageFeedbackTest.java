@@ -101,4 +101,36 @@ class MessageFeedbackTest {
         try(feedback) {when(message.reply(anyString())).thenThrow(new IllegalStateException());assertThrows(IllegalStateException.class,()->feedback.reply("answer",()->{}));}
         assertEquals(List.of("+👀","-👀"),operations);
     }
+    @Test void longReplyWaitsForEachChunkAndCompletesOnlyAfterLastDelivery() {
+        var feedback=new MessageFeedback(message);feedback.pickedUp();
+        var completed=new java.util.concurrent.atomic.AtomicInteger();
+        var messages=new ArrayList<Message>();
+        String text="長".repeat(4001);
+        feedback.reply(text,completed::incrementAndGet,messages::add);
+        feedback.close();
+        verify(message,times(1)).reply(anyString());
+        delivered.accept(message);
+        verify(message,times(2)).reply(anyString());
+        assertEquals(0,completed.get());assertEquals(List.of("+👀"),operations);
+        delivered.accept(message);
+        verify(message,times(3)).reply(anyString());
+        assertEquals(0,completed.get());
+        delivered.accept(message);
+        assertEquals(1,completed.get());assertEquals(3,messages.size());
+        var chunks=org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(message,times(3)).reply(chunks.capture());
+        assertEquals(text,String.join("",chunks.getAllValues()));
+        assertEquals(List.of("+👀","-👀"),operations);
+        verify(reply,never()).addFiles(any(net.dv8tion.jda.api.utils.FileUpload.class));
+    }
+    @Test void failedChunkStopsRemainingOutputAndDoesNotReportCompletion() {
+        var feedback=new MessageFeedback(message);feedback.pickedUp();
+        var completed=new java.util.concurrent.atomic.AtomicInteger();
+        feedback.reply("長".repeat(6000),completed::incrementAndGet);
+        delivered.accept(message);
+        rejected.accept(new IllegalStateException());
+        verify(message,times(2)).reply(anyString());
+        assertEquals(0,completed.get());assertEquals(List.of("+👀","-👀"),operations);
+    }
+
 }
