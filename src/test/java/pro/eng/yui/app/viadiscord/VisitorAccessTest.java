@@ -1,0 +1,87 @@
+package pro.eng.yui.app.viadiscord;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.Mockito.*;
+import java.nio.file.*;
+import java.time.*;
+import java.util.List;
+import net.dv8tion.jda.api.entities.Role;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+class VisitorAccessTest {
+    @TempDir Path directory;
+    static final String USER="123456789012345678", OTHER="223456789012345678";
+    static net.dv8tion.jda.api.entities.Member visitor() {
+        var member=AiAccessTest.member(false,USER);
+        when(member.getRoles().getFirst().getName()).thenReturn("GvDvisitor");
+        return member;
+    }
+    @Test void requiresConfiguredExactChannelRoleAndExplicitMention() throws Exception {
+        var access=new VisitorAccess(directory);
+        var settings=new ResponseSettings(directory.resolve("response.properties"));
+        var h=new GvdListenerTest();h.directory=directory;h.setUp();
+        var member=visitor();h.mentionBot("<@"+GvdListenerTest.BOT+">");
+        assertFalse(access.permits(h.messageEvent,member,settings));
+        access.setChannel(ChannelControlsTest.CHANNEL);
+        assertTrue(access.permits(h.messageEvent,member,settings));
+        when(h.message.getContentRaw()).thenReturn("implicit reply");
+        assertFalse(access.permits(h.messageEvent,member,settings));
+        h.mentionBot("<@!"+GvdListenerTest.BOT+">");
+        assertTrue(access.permits(h.messageEvent,member,settings));
+        when(member.getRoles().getFirst().getName()).thenReturn("GvDvisitor extra");
+        assertFalse(access.permits(h.messageEvent,member,settings));
+        when(member.getRoles().getFirst().getName()).thenReturn("GvDvisitor");
+        when(member.getUser().isBot()).thenReturn(true);
+        assertFalse(access.permits(h.messageEvent,member,settings));
+        assertFalse(access.permits(h.messageEvent,null,settings));
+        when(member.getUser().isBot()).thenReturn(false);
+        when(h.messageEvent.getChannel().getId()).thenReturn(ChannelControlsTest.THREAD);
+        assertFalse(access.permits(h.messageEvent,member,settings));
+        when(h.messageEvent.getChannel().getId()).thenReturn(ChannelControlsTest.CHANNEL);
+        access.setChannel(ChannelControlsTest.THREAD);
+        assertFalse(new VisitorAccess(directory).permits(h.messageEvent,member,settings));
+    }
+    @Test void onlySavedGeneratedRoleIdsGrantTheException() throws Exception {
+        var access=new VisitorAccess(directory);access.setChannel(ChannelControlsTest.CHANNEL);
+        var settings=new ResponseSettings(directory.resolve("response.properties"));
+        var h=new GvdListenerTest();h.directory=directory;h.setUp();
+        var role=mock(Role.class);when(role.getId()).thenReturn(OTHER);when(role.getName()).thenReturn("GvD: guide");
+        when(h.message.getMentions().getRoles()).thenReturn(List.of(role));
+        assertFalse(access.permits(h.messageEvent,visitor(),settings));
+        settings.putCharacter(new CharacterSpec("guide","guide"),OTHER);
+        assertTrue(access.permits(h.messageEvent,visitor(),settings));
+        when(role.getId()).thenReturn(USER);
+        assertFalse(access.permits(h.messageEvent,visitor(),settings));
+    }
+    static Clock at(long millis) {return Clock.fixed(Instant.ofEpochMilli(millis),ZoneOffset.UTC);}
+    @Test void independentSixtySecondSlotsSurviveRestartAndChannelChange() throws Exception {
+        var access=new VisitorAccess(directory,at(100_000));
+        access.setChannel(ChannelControlsTest.CHANNEL);
+        assertTrue(access.acquire(USER));assertFalse(access.acquire(USER));assertTrue(access.acquire(OTHER));
+        access=new VisitorAccess(directory,at(159_999));access.setChannel(ChannelControlsTest.THREAD);
+        assertFalse(access.acquire(USER));
+        assertFalse(new VisitorAccess(directory,at(90_000)).acquire(USER));
+        assertTrue(new VisitorAccess(directory,at(160_000)).acquire(USER));
+        assertFalse(new VisitorAccess(directory,at(160_000)).acquire(USER));
+    }
+    @Test void saveFailureDoesNotGrantOrConsumeAndCorruptStateFailsClosed() throws Exception {
+        var access=new VisitorAccess(directory,at(100_000));
+        Files.createDirectory(directory.resolve("ai-visitor.properties"));
+        assertThrows(java.io.IOException.class,()->access.setChannel(ChannelControlsTest.CHANNEL));
+        assertThrows(java.io.IOException.class,()->access.acquire(USER));
+        Files.delete(directory.resolve("ai-visitor.properties"));
+        assertTrue(access.acquire(USER));
+        Files.writeString(directory.resolve("ai-visitor.properties"),"last."+USER+"=invalid");
+        assertThrows(java.io.IOException.class,()->new VisitorAccess(directory));
+    }
+    @Test void simultaneousRequestsHaveOnlyOneWinner() throws Exception {
+        var access=new VisitorAccess(directory,at(100_000));
+        try(var executor=java.util.concurrent.Executors.newFixedThreadPool(4)) {
+            var tasks=new java.util.ArrayList<java.util.concurrent.Future<Boolean>>();
+            for(int i=0;i<8;i++)tasks.add(executor.submit(()->access.acquire(USER)));
+            int accepted=0;for(var task:tasks)if(task.get())accepted++;
+            assertEquals(1,accepted);
+        }
+    }
+}

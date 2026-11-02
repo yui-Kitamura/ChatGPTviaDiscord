@@ -93,6 +93,54 @@ class AiConversationTest {
         }
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({"false,false", "false,true", "true,false", "true,true"})
+    void visitorWithoutNormalRoleReachesProviderAndSecondCallIsThrottled(boolean threadMode, boolean roleMention) throws Exception {
+        var transport=mock(OpenAiTransport.class);
+        when(transport.respond(anyString(),anyString(),anyString(),anyList(),any(OpenAiTransport.Progress.class)))
+                .thenReturn(threadMode?CharacterReplyTest.REPLY.replace("[4]","[]"):"answer");
+        try(var accounts=new ChatGptAccounts(directory.resolve("auth"));var session=new ChatGptSession(accounts,transport,0)) {
+            account(accounts);
+            var h=event(USER,false,"visitor-post","question");
+            var member=VisitorAccessTest.visitor();
+            when(h.messageEvent.getMember()).thenReturn(member);when(h.guild.getMemberById(USER)).thenReturn(member);
+            h.controls.update(ChannelControlsTest.GUILD,"skipch",ChannelControlsTest.CHANNEL);
+            var settings=new ResponseSettings(directory.resolve("response.properties"));
+            if(threadMode)settings.setMode(ChannelControlsTest.CHANNEL,ResponseMode.THREAD);
+            String characterId="456789012345678901";
+            if(roleMention) {
+                h.mentionRole("GvD: 案内人");
+                when(h.message.getMentions().getRoles().getFirst().getId()).thenReturn(characterId);
+                settings.putCharacter(new CharacterSpec("案内人","案内人"),characterId);
+            } else h.mentionBot("<@"+GvdListenerTest.BOT+">");
+            var channel=h.messageEvent.getChannel();
+            when(h.message.getChannel()).thenReturn(channel);when(h.message.getGuild()).thenReturn(h.guild);
+            var post=mock(net.dv8tion.jda.api.requests.restaction.MessageCreateAction.class,RETURNS_SELF);
+            var sent=mock(Message.class);when(sent.getId()).thenReturn("sent");
+            when(channel.sendMessage(anyString())).thenReturn(post);when(post.complete()).thenReturn(sent);
+            var second=event(USER,false,"visitor-second-post","question");
+            when(second.messageEvent.getMember()).thenReturn(member);when(second.guild.getMemberById(USER)).thenReturn(member);
+            second.mentionBot("<@"+GvdListenerTest.BOT+">");
+            var throttled=new CountDownLatch(1);
+            doAnswer(i->{i.<java.util.function.Consumer<Message>>getArgument(0).accept(sent);return null;})
+                    .when(h.reply).queue(any(),any());
+            doAnswer(i->{i.<java.util.function.Consumer<Message>>getArgument(0).accept(sent);throttled.countDown();return null;})
+                    .when(second.reply).queue(any(),any());
+            var gateway=new CharacterRoles.RoleGateway(){public boolean exists(String id){return true;}public String create(String name){return characterId;}};
+            var done=new CountDownLatch(1);
+            var access=new AiAccess(directory,ROLE);access.visitors.setChannel(ChannelControlsTest.CHANNEL);
+            assertFalse(access.permits(member));
+            try(var ai=new AiConversation(access,h.controls,session,transport,settings,new ChatHistory(directory.resolve("history")),"guide",guild->gateway)) {
+                ai.onResponseCompleted(done::countDown);
+                var listener=new GvdListener(h.controls,ai);
+                listener.onMessageReceived(h.messageEvent);assertTrue(done.await(5,TimeUnit.SECONDS));
+                listener.onMessageReceived(second.messageEvent);assertTrue(throttled.await(5,TimeUnit.SECONDS));
+            }
+            verify(transport,times(1)).respond(anyString(),anyString(),anyString(),anyList(),any(OpenAiTransport.Progress.class));
+            verify(second.message).reply(contains("60秒"));
+        }
+    }
+
     void account(ChatGptAccounts accounts) throws Exception {
         var a=new ChatGptAccounts.Account();a.clientId="oaiapp_shared";a.subject="owner";a.accessToken="access";a.refreshToken="refresh";
         a.scope="chatgpt.tokens.use.direct";a.expiresAt=Instant.now().plusSeconds(3600).getEpochSecond();a.model="chosen";

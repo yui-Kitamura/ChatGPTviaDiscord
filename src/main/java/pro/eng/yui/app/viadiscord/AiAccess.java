@@ -6,9 +6,11 @@ import java.nio.file.Path;
 import net.dv8tion.jda.api.entities.Member;
 
 final class AiAccess {
+    final VisitorAccess visitors;
     private final Path file;
     private volatile java.util.Set<String> roles;
     AiAccess(Path directory,String initialRole) throws IOException {
+        visitors=new VisitorAccess(directory);
         file=directory.resolve("ai-role.txt");
         String value=Files.exists(file)?Files.readString(file).trim():initialRole;
         var loaded=new java.util.TreeSet<String>();
