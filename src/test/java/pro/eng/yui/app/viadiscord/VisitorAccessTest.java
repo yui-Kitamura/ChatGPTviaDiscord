@@ -75,6 +75,28 @@ class VisitorAccessTest {
         Files.writeString(directory.resolve("ai-visitor.properties"),"last."+USER+"=invalid");
         assertThrows(java.io.IOException.class,()->new VisitorAccess(directory));
     }
+    @Test void clearingDisablesTheExceptionAcrossRestartAndRetainsRateState() throws Exception {
+        var access=new VisitorAccess(directory,at(100_000));
+        var settings=new ResponseSettings(directory.resolve("response.properties"));
+        var h=new GvdListenerTest();h.directory=directory;h.setUp();h.mentionBot("<@"+GvdListenerTest.BOT+">");
+        var member=visitor();access.setChannel(ChannelControlsTest.CHANNEL);
+        assertTrue(access.permits(h.messageEvent,member,settings));assertTrue(access.acquire(USER));
+        access.clearChannel();
+        assertFalse(access.permits(h.messageEvent,member,settings));
+        access=new VisitorAccess(directory,at(100_001));
+        assertFalse(access.permits(h.messageEvent,member,settings));
+        access.clearChannel(); // Idempotent when not configured.
+        access.setChannel(ChannelControlsTest.CHANNEL);
+        assertTrue(access.permits(h.messageEvent,member,settings));assertFalse(access.acquire(USER));
+    }
+    @Test void failedClearRetainsTheConfiguredChannel() throws Exception {
+        var access=new VisitorAccess(directory);access.setChannel(ChannelControlsTest.CHANNEL);
+        var settings=new ResponseSettings(directory.resolve("response.properties"));
+        var h=new GvdListenerTest();h.directory=directory;h.setUp();h.mentionBot("<@"+GvdListenerTest.BOT+">");
+        Files.delete(directory.resolve("ai-visitor.properties"));Files.createDirectory(directory.resolve("ai-visitor.properties"));
+        assertThrows(java.io.IOException.class,access::clearChannel);
+        assertTrue(access.permits(h.messageEvent,visitor(),settings));
+    }
     @Test void simultaneousRequestsHaveOnlyOneWinner() throws Exception {
         var access=new VisitorAccess(directory,at(100_000));
         try(var executor=java.util.concurrent.Executors.newFixedThreadPool(4)) {

@@ -66,9 +66,16 @@ final class AiCommands extends ListenerAdapter {
             event.reply("visitorチャンネルの変更にはサーバー管理権限が必要です。").setEphemeral(true).queue();return;
         }
         var option=event.getOption("ch");
-        if(option==null) {event.reply("対象チャンネルを指定してください。").setEphemeral(true).queue();return;}
-        var channel=option.getAsChannel();
-        if(!guild.equals(channel.getGuild().getId())||!channel.getType().isMessage()) {
+        var deleteOption=event.getOption("delete");
+        boolean delete=deleteOption!=null&&deleteOption.getAsBoolean();
+        if(delete&&option!=null) {
+            event.reply("解除時は ch を指定せず delete:true だけを指定してください。").setEphemeral(true).queue();return;
+        }
+        if(!delete&&option==null) {
+            event.reply("設定する ch、または解除する delete:true を指定してください。").setEphemeral(true).queue();return;
+        }
+        var channel=option==null?null:option.getAsChannel();
+        if(channel!=null&&(!guild.equals(channel.getGuild().getId())||!channel.getType().isMessage())) {
             event.reply("対象サーバーのメッセージを投稿できるチャンネルを指定してください。").setEphemeral(true).queue();return;
         }
         event.deferReply(true).queue(hook->{
@@ -77,6 +84,10 @@ final class AiCommands extends ListenerAdapter {
                 say(hook,"サーバー管理権限がなくなったため処理を中止しました。");return;
             }
             try {
+                if(delete) {
+                    access.visitors.clearChannel();
+                    say(hook,"visitorチャンネルの指定を解除しました。visitorによる利用ロール例外は無効です。");return;
+                }
                 access.visitors.setChannel(channel.getId());
                 say(hook,"<#"+channel.getId()+"> をvisitorチャンネルに設定しました。GvDvisitor ロールの人はBot・生成キャラロールへの明示メンションでAIを呼べます（1人60秒に1回）。");
             } catch(java.io.IOException e) {
