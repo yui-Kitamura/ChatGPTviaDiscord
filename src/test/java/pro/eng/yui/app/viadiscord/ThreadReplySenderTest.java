@@ -74,10 +74,14 @@ class ThreadReplySenderTest {
         verify(post,never()).setMessageReference(anyString());verify(channel).sendMessage(contains(">>3 \n"));
     }
 
-    @Test void longPostKeepsNumberAndRoleInMessageAndBodyInAttachment() throws Exception {
+    @Test void longPostSplitsIntoMessagesWithoutAttachment() throws Exception {
         ThreadReplySender.send(source,reply("長".repeat(8000),List.of()),1,roles,new ChatHistory.History(),()->{});
-        verify(channel).sendMessage("3：案内人 <@&456789012345678901>\n本文を添付しました。");
-        verify(post).addFiles(any(net.dv8tion.jda.api.utils.FileUpload.class));
+        var bodies=org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(channel,atLeastOnce()).sendMessage(bodies.capture());
+        var chunks=bodies.getAllValues();
+        assertEquals("2：案内人 <@&456789012345678901>\n確認します。3：案内人 <@&456789012345678901>\n"+"長".repeat(8000),String.join("",chunks));
+        assertTrue(chunks.stream().allMatch(t->t.length()<=2000));
+        verify(post,never()).addFiles(any(net.dv8tion.jda.api.utils.FileUpload.class));
     }
 
     @Test void deliveredLongPostsSaveTheirFullBodyByDiscordId() throws Exception {
@@ -87,6 +91,21 @@ class ThreadReplySenderTest {
         String body=new ChatHistory(directory).replyBody("123","345678901234567891");
         assertTrue(body.startsWith("3：案内人 <@&456789012345678901>\n"));
         assertTrue(body.endsWith("長".repeat(8000)));
+    }
+
+    @Test void splitPostKeepsFirstMessageAsNumberTargetAndSavesEveryDeliveredId() throws Exception {
+        var sequence=new java.util.concurrent.atomic.AtomicInteger();
+        when(post.complete()).thenAnswer(invocation->{
+            var sent=mock(Message.class);
+            when(sent.getId()).thenReturn("chunk-"+sequence.incrementAndGet());return sent;
+        });
+        var saved=new ChatHistory.History();var bodies=new LinkedHashMap<String,String>();
+        ThreadReplySender.send(source,reply("長".repeat(8000),List.of()),1,roles,saved,()->{},bodies::put);
+        assertEquals("chunk-2",saved.postMessages.get(3L));
+        assertTrue(sequence.get()>2);
+        for(int i=2;i<=sequence.get();i++) {
+            assertEquals("3：案内人 <@&456789012345678901>\n"+"長".repeat(8000),bodies.get("chunk-"+i));
+        }
     }
 
     @Test void sendFailureKeepsOnlySuccessfulPostIdsAndStops() throws Exception {
@@ -123,10 +142,14 @@ class ThreadReplySenderTest {
         assertEquals(Set.of(1L,2L,3L),saved.postMessages.keySet());assertFalse(saved.postMessages.containsValue("sources-id"));
         assertEquals(note,bodies.get("sources-id"));
     }
-    @Test void longSourceListUsesSeparateAttachmentAndSourceFailureIsPropagated() throws Exception {
+    @Test void longSourceListSplitsAndSourceFailureIsPropagated() throws Exception {
         String note="出典:\n"+"https://example.com/long\n".repeat(100);
         ThreadReplySender.send(source,reply("本文。",List.of()),1,roles,new ChatHistory.History(),()->{},(id,body)->{},note);
-        verify(channel).sendMessage("出典を添付しました。");verify(post).addFiles(any(net.dv8tion.jda.api.utils.FileUpload.class));
+        var chunks=org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(channel,atLeastOnce()).sendMessage(chunks.capture());
+        assertTrue(String.join("",chunks.getAllValues()).endsWith(note));
+        assertTrue(chunks.getAllValues().stream().allMatch(t->t.length()<=2000));
+        verify(post,never()).addFiles(any(net.dv8tion.jda.api.utils.FileUpload.class));
         var failure=mock(MessageCreateAction.class,RETURNS_SELF);when(failure.complete()).thenThrow(new IllegalStateException());
         when(channel.sendMessage("出典:\nhttps://example.com/source")).thenReturn(failure);
         assertThrows(IllegalStateException.class,()->ThreadReplySender.send(source,reply("本文。",List.of()),1,roles,new ChatHistory.History(),()->{},(id,body)->{},"出典:\nhttps://example.com/source"));
