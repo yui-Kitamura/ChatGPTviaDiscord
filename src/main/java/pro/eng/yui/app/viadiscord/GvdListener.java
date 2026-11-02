@@ -31,10 +31,7 @@ final class GvdListener extends ListenerAdapter {
         Message message = event.getMessage();
         if (message.isWebhookMessage() || event.getAuthor().isBot()
                 || (message.getType() != MessageType.DEFAULT && message.getType() != MessageType.INLINE_REPLY)) return;
-        String parent = event.getChannelType().isThread()
-                ? event.getChannel().asThreadChannel().getParentChannel().getId() : null;
-        if (!controls.shouldRespond(event.getGuild().getId(), event.getChannel().getId(), parent,
-                event.getAuthor().isBot(), message.isWebhookMessage(), message.getType())) return;
+        if (!controls.shouldRespond(event)) return;
         if (conversation != null) { conversation.accept(event); return; }
         var feedback=new MessageFeedback(message);
         feedback.pickedUp();

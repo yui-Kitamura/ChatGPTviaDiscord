@@ -124,8 +124,7 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
     private void process(List<MessageReceivedEvent> batch,MessageReceivedEvent event,MessageFeedback feedback,boolean retry) {
         try(var diagnostic=FailureDiagnostics.context(event.getMessage().getId());feedback) {
             Message message=event.getMessage();String user=event.getAuthor().getId();
-            String parent=event.getChannelType().isThread()?event.getChannel().asThreadChannel().getParentChannel().getId():null;
-            if(!access.permits(event.getGuild().getMemberById(user))||!controls.shouldRespond(event.getGuild().getId(),event.getChannel().getId(),parent,false,false,message.getType()))return;
+            if(!access.permits(event.getGuild().getMemberById(user))||!controls.shouldRespond(event))return;
             try {
                 if(retry&&settings.mode(event.getChannel().getId())!=ResponseMode.THREAD)return;
                 var account=session.ready(event.getGuild().getId());
@@ -158,7 +157,7 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
                 prompt+=CharacterReply.instructions(context,saved.nextPost+1);
                 String response=transport.respond(account.accessToken,account.model,prompt,input,feedback);
                 var responseTime=OffsetDateTime.now();
-                if(!session.isCurrent(event.getGuild().getId(),account)||!access.permits(event.getGuild().getMemberById(user))||!controls.shouldRespond(event.getGuild().getId(),event.getChannel().getId(),parent,false,false,message.getType()))return;
+                if(!session.isCurrent(event.getGuild().getId(),account)||!access.permits(event.getGuild().getMemberById(user))||!controls.shouldRespond(event))return;
                 CharacterReply generated=null;
                 List<ResponseSettings.CharacterRole> roles=List.of();
                 long firstPost=saved.nextPost;
@@ -172,7 +171,7 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
                     try {roles=characterRoles.ensureCharacters(generated.characters(),()->{
                         try {return session.isCurrent(event.getGuild().getId(),account)&&access.permits(event.getGuild().getMemberById(user))
                                 &&settings.mode(event.getChannel().getId())==context.mode()
-                                &&controls.shouldRespond(event.getGuild().getId(),event.getChannel().getId(),parent,false,false,message.getType());}
+                                &&controls.shouldRespond(event);}
                         catch(java.io.IOException e){FailureDiagnostics.log("CHARACTER_PERMISSION_RECHECK",e);return false;}
                     });}
                     catch(java.io.IOException|RuntimeException e) {
@@ -229,9 +228,8 @@ final class AiConversation implements java.util.function.Consumer<MessageReceive
                 ||!event.getUser().getId().equals(original.getAuthor().getId())||!access.permits(event.getMember())) {
             retryNotice(event,"この再送ボタンは、利用権限のある元の投稿者だけが使えます。");return;
         }
-        String parent=original.getChannelType().isThread()?original.getChannel().asThreadChannel().getParentChannel().getId():null;
         if(settings.mode(original.getChannel().getId())!=ResponseMode.THREAD
-                ||!controls.shouldRespond(original.getGuild().getId(),original.getChannel().getId(),parent,false,false,original.getMessage().getType())) {
+                ||!controls.shouldRespond(original)) {
             retryNotice(event,"現在のモードまたはチャンネル設定では再送できません。");return;
         }
         if(!request.claimed().compareAndSet(false,true)){retryNotice(event,"この依頼は再送を受け付けています。");return;}
