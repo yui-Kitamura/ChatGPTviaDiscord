@@ -41,6 +41,11 @@ final class VisitorAccess {
         next.setProperty("channel", channel);
         save(next);
     }
+    synchronized void clearChannel() throws IOException {
+        var next = copy();
+        next.remove("channel");
+        save(next);
+    }
     synchronized boolean permits(MessageReceivedEvent event, Member member, ResponseSettings settings) {
         if (member == null || member.getUser().isBot() || !event.isFromGuild()
                 || !event.getChannel().getId().equals(data.getProperty("channel"))

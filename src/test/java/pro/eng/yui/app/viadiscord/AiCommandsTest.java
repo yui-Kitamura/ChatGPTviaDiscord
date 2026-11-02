@@ -54,6 +54,41 @@ class AiCommandsTest {
             listener.onSlashCommandInteraction(event);verify(hook).editOriginal(contains("保存できなかった"));
         } finally {listener.onShutdown(null);}
     }
+    @Test void deletingVisitorChannelRequiresManagerAndRechecksPermission() throws Exception {
+        var access=new AiAccess(directory,"");access.visitors.setChannel(ChannelControlsTest.CHANNEL);
+        var hook=hook();var member=VisitorAccessTest.visitor();var event=event("visitorch",member,hook);
+        var guild=event.getGuild();var userId=event.getUser().getId();
+        var delete=mock(OptionMapping.class);when(delete.getAsBoolean()).thenReturn(true);when(event.getOption("delete")).thenReturn(delete);
+        var listener=commands(access);
+        try {
+            listener.onSlashCommandInteraction(event);verify(event,never()).deferReply(true);
+            assertTrue(java.nio.file.Files.readString(directory.resolve("ai-visitor.properties")).contains("channel="));
+            when(member.hasPermission(Permission.MANAGE_SERVER)).thenReturn(true);
+            listener.onSlashCommandInteraction(event); // Member cache no longer contains this actor.
+            verify(hook).editOriginal(contains("サーバー管理権限がなくなった"));
+            assertTrue(java.nio.file.Files.readString(directory.resolve("ai-visitor.properties")).contains("channel="));
+            when(guild.getMemberById(userId)).thenReturn(member);
+            listener.onSlashCommandInteraction(event);
+            verify(hook).editOriginal(contains("指定を解除しました"));
+            assertFalse(java.nio.file.Files.readString(directory.resolve("ai-visitor.properties")).contains("channel="));
+            listener.onSlashCommandInteraction(event); // Repeated clear also succeeds.
+            verify(hook,times(2)).editOriginal(contains("指定を解除しました"));
+        } finally {listener.onShutdown(null);}
+    }
+    @Test void visitorChannelRejectsMissingActionAndConflictingOptions() throws Exception {
+        var access=new AiAccess(directory,"");access.visitors.setChannel(ChannelControlsTest.CHANNEL);
+        var member=VisitorAccessTest.visitor();when(member.hasPermission(Permission.MANAGE_SERVER)).thenReturn(true);
+        var event=event("visitorch",member,hook());var listener=commands(access);
+        try {
+            listener.onSlashCommandInteraction(event);verify(event).reply(contains("設定する ch"));
+            var delete=mock(OptionMapping.class);when(delete.getAsBoolean()).thenReturn(false);when(event.getOption("delete")).thenReturn(delete);
+            listener.onSlashCommandInteraction(event);verify(event,times(2)).reply(contains("設定する ch"));
+            when(delete.getAsBoolean()).thenReturn(true);when(event.getOption("ch")).thenReturn(mock(OptionMapping.class));
+            listener.onSlashCommandInteraction(event);verify(event).reply(contains("解除時は ch を指定せず"));
+            verify(event,never()).deferReply(true);
+            assertTrue(java.nio.file.Files.readString(directory.resolve("ai-visitor.properties")).contains("channel="));
+        } finally {listener.onShutdown(null);}
+    }
     @Test void onlyServerManagersCanAddAndRemoveAcceptedRoles() throws Exception {
         var access=new AiAccess(directory,"");var hook=hook();var member=AiAccessTest.member(false);var listener=commands(access);
         var event=event("accept",member,hook);var role=mock(Role.class);when(role.getId()).thenReturn(ROLE);
