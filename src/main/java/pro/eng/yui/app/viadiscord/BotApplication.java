@@ -70,6 +70,7 @@ public final class BotApplication {
             var transport = new OpenAiTransport(aiConfig.timeout());
             var accounts = aiConfig.enabled() ? new ChatGptAccounts(config.stateDirectory().resolve("chatgpt")) : null;
             var session = aiConfig.enabled() ? new ChatGptSession(accounts, transport, aiConfig.callbackPort()) : null;
+            var modelPresence = new ModelPresence(config.guildId(), accounts, session, transport);
             var responseSettings = new ResponseSettings(config.stateDirectory().resolve("response-" + config.guildId() + ".properties"));
             var limitCommand = new LimitCommandListener(config.guildId(), session, transport,
                     usageConfig.enabled() ? new CodexUsageClient(usageConfig) : null);
@@ -82,6 +83,7 @@ public final class BotApplication {
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 trash.close();
                 limitNotifications.close();
+                modelPresence.close();
                 if (conversation != null) conversation.close();
                 if (session != null) session.close();
                 if (accounts != null) try { accounts.close(); } catch (IOException ignored) {}
@@ -95,7 +97,7 @@ public final class BotApplication {
                     .setStatus(OnlineStatus.ONLINE)
                     .setAutoReconnect(true)
                     .setEnableShutdownHook(true)
-                    .addEventListeners(limitCommand, limitNotifications, trash)
+                    .addEventListeners(limitCommand, limitNotifications, trash, modelPresence)
                     .addEventListeners(new ModeCommandListener(config.guildId(), responseSettings, session, conversation))
                     .addEventListeners(new AiCommands(config.guildId(), aiConfig, access, accounts, session, transport))
                     .addEventListeners(commands, new ListenerAdapter() {

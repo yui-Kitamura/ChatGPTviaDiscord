@@ -24,6 +24,8 @@ mvn --batch-mode --no-transfer-progress verify
 
 現在のアプリケーションは Discord Gateway に接続し、指定サーバーへの参加を確認してオンラインを維持する最小構成。通常投稿への 👀 と通知を抑えた定型返信、チャンネル単位の応答停止・再開と `/gvd mode` の応答設定保存に対応する。`CHATGPT_ENABLED=true` で、Bot共通のChatGPT接続と直近会話の保存を有効にできる。設定・認証の手順は [ChatGPT接続](docs/02_ChatGPT接続.md) を参照。
 
+GPT系統のモデルを選択すると、オンラインステータスにモデル一覧の正式名称（`GPT-…`）を表示する。起動時に復元し、20秒間隔でモデル・使用アカウントの変更やログアウトを確認して反映する。GPT系統以外やAI無効時はモデル表示を消す。既存設定に名称がない場合はモデル一覧を取得する（AI応答の生成は行わず、取得に失敗した場合は次回再試行する）。DiscordのBot用Presenceはカスタム絵文字を設定できないため、Dev Portalの絵文字は表示しない。
+
 ## CI と VPS デプロイ
 
 [deployVps.yml](.github/workflows/deployVps.yml) は、[Discord2Html の workflow](https://github.com/yui-Kitamura/Discord2Html/blob/main/.github/workflows/deployVps.yml) を基に、build と deploy の 2 ジョブに分離する。
