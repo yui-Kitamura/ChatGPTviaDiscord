@@ -127,7 +127,8 @@ final class AiCommands extends ListenerAdapter {
             say(hook,"現在のモデル: "+(a.model.isEmpty()?"未選択":a.model)+"\n"+models.stream().map(m->m.name()+" : "+m.slug()).collect(java.util.stream.Collectors.joining("\n"))+"\n/gvd model name:<slug> で選択してください。");return;
         }
         if(models.stream().noneMatch(m->m.slug().equals(name))){say(hook,"このアカウントで利用できるモデルのslugを指定してください。");return;}
-        a.model=name;accounts.put(accounts.activeKey(user),a,false);say(hook,"応答モデルを "+name+" に保存しました。");
+        a.model=name;a.modelName=models.stream().filter(m->m.slug().equals(name)).findFirst().orElseThrow().name();
+        accounts.put(accounts.activeKey(user),a,false);say(hook,"応答モデルを "+name+" に保存しました。");
         }
     }
     private static String option(SlashCommandInteractionEvent e,String name,String fallback){var o=e.getOption(name);return o==null?fallback:o.getAsString();}

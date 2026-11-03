@@ -11,6 +11,7 @@ final class ChatGptAccounts implements AutoCloseable {
     static final ObjectMapper JSON = new ObjectMapper();
     static final class Account {
         public String clientId="", subject="", email="", idToken="", accessToken="", refreshToken="", model="", scope="";
+        public String modelName="";
         public long expiresAt;
         public Account() {}
         boolean canInvoke() { return Arrays.asList(scope.split(" ")).contains("chatgpt.tokens.use.direct"); }

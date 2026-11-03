@@ -117,7 +117,7 @@ final class ChatGptSession implements AutoCloseable {
             stage=AuthDiagnostics.Stage.TOKEN_RESPONSE;
             var account=fromTokens(response,null);
             account.clientId=client;account.subject=identity.subject();account.email=Objects.toString(identity.email(),"");
-            var previous=accounts.get(attempt.key);if(previous!=null)account.model=previous.model;
+            var previous=accounts.get(attempt.key);if(previous!=null){account.model=previous.model;account.modelName=previous.modelName;}
             stage=AuthDiagnostics.Stage.PERMISSION_RECHECK;
             if(!attempt.permitted.getAsBoolean())throw new IOException("AI role no longer available.");
             stage=AuthDiagnostics.Stage.CREDENTIAL_SAVE;
