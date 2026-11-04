@@ -1,0 +1,236 @@
+package pro.eng.yui.app.viadiscord.discord;
+
+import static org.junit.jupiter.api.Assertions.*;
+import static org.mockito.ArgumentMatchers.*;
+import static org.mockito.Mockito.*;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.function.Consumer;
+import net.dv8tion.jda.api.entities.Message;
+import net.dv8tion.jda.api.entities.emoji.Emoji;
+import net.dv8tion.jda.api.requests.RestAction;
+import net.dv8tion.jda.api.requests.restaction.MessageCreateAction;
+import org.junit.jupiter.api.Test;
+
+class MessageFeedbackTest {
+
+    final Message message = mock(Message.class);
+    final List<String> operations = new ArrayList<>();
+    final MessageCreateAction reply = mock(MessageCreateAction.class, RETURNS_SELF);
+    Consumer<Message> delivered;
+    Consumer<Throwable> rejected;
+
+    @SuppressWarnings("unchecked")
+    MessageFeedbackTest() {
+        when(message.addReaction(any(Emoji.class))).thenAnswer(
+            i -> action("+" + i.<Emoji>getArgument(0).getName())
+        );
+        when(message.removeReaction(any(Emoji.class))).thenAnswer(
+            i -> action("-" + i.<Emoji>getArgument(0).getName())
+        );
+        when(message.reply(anyString())).thenReturn(reply);
+        doAnswer(
+            i -> {
+                delivered = i.getArgument(0);
+                rejected = i.getArgument(1);
+                return null;
+            }
+        ).when(reply).queue(any(), any());
+    }
+
+    @SuppressWarnings("unchecked")
+    RestAction<Void> action(String operation) {
+        var action = (RestAction<Void>) mock(RestAction.class);
+        when(action.submit()).thenAnswer(
+            i -> {
+                operations.add(operation);
+                return CompletableFuture.completedFuture(null);
+            }
+        );
+        return action;
+    }
+
+    @Test
+    void progressRemainsUntilAsyncOutputFinishesAndOnlyOwnReactionsAreRemoved() {
+        var feedback = new MessageFeedback(message);
+        feedback.pickedUp();
+        feedback.sent();
+        feedback.receiving();
+        feedback.reply(
+            "answer",
+            () -> {
+            }
+        );
+        feedback.close();
+        assertEquals(List.of("+👀", "+📨", "-👀", "+⤵️", "-📨"), operations);
+        delivered.accept(message);
+        assertEquals("-⤵️", operations.getLast());
+        verify(message, never()).clearReactions();
+    }
+
+    @Test
+    void errorMarkerIsRemovedAfterErrorOutputAndSendFailureAlsoCleansUp() {
+        for (boolean success : List.of(false, true)) {
+            operations.clear();
+            var feedback = new MessageFeedback(message);
+            feedback.pickedUp();
+            feedback.sent();
+            feedback.reply("error");
+            feedback.close();
+            assertEquals(List.of("+👀", "+📨", "-👀", "+❌", "-📨"), operations);
+            if (success) {
+                delivered.accept(message);
+            } else {
+                rejected.accept(new IllegalStateException());
+            }
+            assertEquals("-❌", operations.getLast());
+        }
+    }
+
+    @Test
+    void slowDiscordRequestsStayOrderedEvenIfOutputAlreadyFinished() throws Exception {
+        var first = new CompletableFuture<Void>();
+        var add = action("unused");
+        doReturn(first).when(add).submit();
+        when(message.addReaction(argThat(e -> "👀".equals(e.getName())))).thenReturn(add);
+        var feedback = new MessageFeedback(message);
+        feedback.pickedUp();
+        feedback.sent();
+        feedback.receiving();
+        var cleared = feedback.clear();
+        assertTrue(operations.isEmpty());
+        assertFalse(cleared.isDone());
+        first.complete(null);
+        cleared.get(1, TimeUnit.SECONDS);
+        assertEquals(List.of("+📨", "-👀", "+⤵️", "-📨", "-⤵️"), operations);
+
+        feedback.receiving();
+        assertEquals(5, operations.size());
+    }
+
+    @Test
+    void eyesAreRemovedOnlyAfterEnvelopeAdditionCompletes() throws Exception {
+        var mailed = new CompletableFuture<Void>();
+        var add = action("unused");
+        doAnswer(
+            i -> {
+                operations.add("+📨");
+                return mailed;
+            }
+        ).when(add).submit();
+        when(message.addReaction(argThat(e -> "📨".equals(e.getName())))).thenReturn(add);
+        var feedback = new MessageFeedback(message);
+        feedback.pickedUp();
+        feedback.sent();
+        feedback.receiving();
+        assertEquals(List.of("+👀", "+📨"), operations);
+        verify(message, never()).removeReaction(any(Emoji.class));
+        mailed.complete(null);
+        feedback.clear().get(1, TimeUnit.SECONDS);
+        assertEquals(List.of("+👀", "+📨", "-👀", "+⤵️", "-📨", "-⤵️"), operations);
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = { false, true })
+    void envelopeRemainsUntilReceivingOrErrorReactionAdditionCompletes(boolean ng) throws Exception {
+        String next = ng ? "❌" : "⤵️";
+        var added = new CompletableFuture<Void>();
+        var add = action("unused");
+        doAnswer(
+            i -> {
+                operations.add("+" + next);
+                return added;
+            }
+        ).when(add).submit();
+        when(message.addReaction(argThat(e -> next.equals(e.getName())))).thenReturn(add);
+        var feedback = new MessageFeedback(message);
+        feedback.pickedUp();
+        feedback.sent();
+        if (ng) {
+            feedback.failed();
+        } else {
+            feedback.receiving();
+        }
+        var cleared = feedback.clear();
+        assertFalse(cleared.isDone());
+        assertEquals(List.of("+👀", "+📨", "-👀", "+" + next), operations);
+        verify(message, never()).removeReaction(argThat(e -> "📨".equals(e.getName())));
+        added.complete(null);
+        cleared.get(1, TimeUnit.SECONDS);
+        assertEquals(List.of("+👀", "+📨", "-👀", "+" + next, "-📨", "-" + next), operations);
+    }
+
+    @Test
+    void reactionFailureDoesNotBlockLaterTransitionsOrCleanup() throws Exception {
+        var add = action("unused");
+        doReturn(CompletableFuture.failedFuture(new IllegalStateException())).when(add).submit();
+        when(message.addReaction(argThat(e -> "👀".equals(e.getName())))).thenReturn(add);
+        var feedback = new MessageFeedback(message);
+        feedback.pickedUp();
+        feedback.sent();
+        feedback.close();
+        feedback.clear().get(1, TimeUnit.SECONDS);
+        assertEquals(List.of("+📨", "-👀", "-📨"), operations);
+    }
+
+    @Test
+    void synchronousOutputFailureAndEarlyExitCleanUp() {
+        var feedback = new MessageFeedback(message);
+        feedback.pickedUp();
+        try (feedback) {
+            when(message.reply(anyString())).thenThrow(new IllegalStateException());
+            assertThrows(
+                IllegalStateException.class,
+                () -> feedback.reply(
+                    "answer",
+                    () -> {
+                    }
+                )
+            );
+        }
+        assertEquals(List.of("+👀", "-👀"), operations);
+    }
+
+    @Test
+    void longReplyWaitsForEachChunkAndCompletesOnlyAfterLastDelivery() {
+        var feedback = new MessageFeedback(message);
+        feedback.pickedUp();
+        var completed = new java.util.concurrent.atomic.AtomicInteger();
+        var messages = new ArrayList<Message>();
+        String text = "長".repeat(4001);
+        feedback.reply(text, completed::incrementAndGet, messages::add);
+        feedback.close();
+        verify(message, times(1)).reply(anyString());
+        delivered.accept(message);
+        verify(message, times(2)).reply(anyString());
+        assertEquals(0, completed.get());
+        assertEquals(List.of("+👀"), operations);
+
+        delivered.accept(message);
+        verify(message, times(3)).reply(anyString());
+
+        assertEquals(0, completed.get());
+
+        delivered.accept(message);
+        assertEquals(1, completed.get());
+        assertEquals(3, messages.size());
+        var chunks = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(message, times(3)).reply(chunks.capture());
+        assertEquals(text, String.join("", chunks.getAllValues()));
+        assertEquals(List.of("+👀", "-👀"), operations);
+        verify(reply, never()).addFiles(any(net.dv8tion.jda.api.utils.FileUpload.class));
+    }
+
+    @Test
+    void failedChunkStopsRemainingOutputAndDoesNotReportCompletion() {
+        var feedback = new MessageFeedback(message);
+        feedback.pickedUp();
+        var completed = new java.util.concurrent.atomic.AtomicInteger();
+        feedback.reply("長".repeat(6000), completed::incrementAndGet);
+        delivered.accept(message);
+        rejected.accept(new IllegalStateException());
+        verify(message, times(2)).reply(anyString());
+        assertEquals(0, completed.get());
+        assertEquals(List.of("+👀", "-👀"), operations);
+    }
+}

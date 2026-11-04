@@ -22,6 +22,20 @@ mvn --batch-mode --no-transfer-progress verify
 
 `target/` に、依存ライブラリを含む `java -jar` で起動可能な JAR を 1 件生成する。sources、javadoc、tests、`original-*` の JAR は対象外。成果物は `chatgptviadiscord.jar` に統一する。
 
+Java のパッケージは `pro.eng.yui.app.viadiscord` を基点として、次の役割で分ける。`BotApplication` は基点直下に置き、JAR の起動クラスを維持する。テストは原則として対象クラスと同じパッケージに置く。
+
+| パッケージ | 役割 |
+| --- | --- |
+| `config` | 起動・AI・利用枠通知の設定読み込み |
+| `core` | 会話処理の進行と応答コンテキスト |
+| `discord` | イベント、コマンド、投稿・添付・ロール・チャンネルの入出力 |
+| `data.local` | アカウント、設定、会話履歴の保存と原子的なファイル更新 |
+| `data.remote` | ChatGPT 認証、OpenAI 通信、利用枠照会 |
+| `domain.model` | 応答モード、キャラ定義、構造化された応答 |
+| `support` | 診断と会話日時の共通処理 |
+
+階層設計の参考は [OsmJPPostalMap](https://github.com/yui-Kitamura/OsmJPPostalMap/tree/main/app/src/main/java/pro/eng/yui/android/osmjppostalmap)、整形の基準は [YuiCat Java Style Guide](https://github.com/yui-Kitamura/lint/blob/main/java.md) とする。
+
 現在のアプリケーションは Discord Gateway に接続し、指定サーバーへの参加を確認してオンラインを維持する最小構成。通常投稿への 👀 と通知を抑えた定型返信、チャンネル単位の応答停止・再開と `/gvd mode` の応答設定保存に対応する。`CHATGPT_ENABLED=true` で、Bot共通のChatGPT接続と直近会話の保存を有効にできる。設定・認証の手順は [ChatGPT接続](docs/02_ChatGPT接続.md) を参照。
 
 GPT系統のモデルを選択すると、オンラインステータスにモデル一覧の正式名称（`GPT-…`）を表示する。起動時に復元し、20秒間隔でモデル・使用アカウントの変更やログアウトを確認して反映する。GPT系統以外やAI無効時はモデル表示を消す。既存設定に名称がない場合はモデル一覧を取得する（AI応答の生成は行わず、取得に失敗した場合は次回再試行する）。DiscordのBot用Presenceはカスタム絵文字を設定できないため、Dev Portalの絵文字は表示しない。

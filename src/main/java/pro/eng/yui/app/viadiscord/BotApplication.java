@@ -1,7 +1,7 @@
 package pro.eng.yui.app.viadiscord;
 
-import java.nio.file.Path;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.EnumSet;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -13,14 +13,41 @@ import net.dv8tion.jda.api.events.session.ReadyEvent;
 import net.dv8tion.jda.api.events.session.ShutdownEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import net.dv8tion.jda.api.requests.GatewayIntent;
+import pro.eng.yui.app.viadiscord.config.AiConfig;
+import pro.eng.yui.app.viadiscord.config.BotConfig;
+import pro.eng.yui.app.viadiscord.config.CodexUsageConfig;
+import pro.eng.yui.app.viadiscord.config.LimitNotificationConfig;
+import pro.eng.yui.app.viadiscord.core.AiConversation;
+import pro.eng.yui.app.viadiscord.data.local.ChannelSettings;
+import pro.eng.yui.app.viadiscord.data.local.ChatGptAccounts;
+import pro.eng.yui.app.viadiscord.data.local.ChatHistory;
+import pro.eng.yui.app.viadiscord.data.local.ResponseSettings;
+import pro.eng.yui.app.viadiscord.data.remote.ChatGptSession;
+import pro.eng.yui.app.viadiscord.data.remote.CodexUsageClient;
+import pro.eng.yui.app.viadiscord.data.remote.OpenAiTransport;
+import pro.eng.yui.app.viadiscord.discord.AiAccess;
+import pro.eng.yui.app.viadiscord.discord.AiCommands;
+import pro.eng.yui.app.viadiscord.discord.ChannelControls;
+import pro.eng.yui.app.viadiscord.discord.GvdListener;
+import pro.eng.yui.app.viadiscord.discord.LimitCommandListener;
+import pro.eng.yui.app.viadiscord.discord.LimitNotifications;
+import pro.eng.yui.app.viadiscord.discord.ModeCommandListener;
+import pro.eng.yui.app.viadiscord.discord.ModelPresence;
+import pro.eng.yui.app.viadiscord.discord.TrashMessages;
 
-/** Discord message acknowledgements, channel controls, and AI limit guidance. */
+/**
+ * Discord message acknowledgements, channel controls, and AI limit guidance.
+ */
 public final class BotApplication {
-    private BotApplication() {}
+
+    private BotApplication() {
+    }
 
     public static void main(String[] args) {
         if (args.length == 1 && "--help".equals(args[0])) {
-            System.out.println("Usage: java -jar chatgptviadiscord.jar [--config <properties-file>] [--check-config]");
+            System.out.println(
+                "Usage: java -jar chatgptviadiscord.jar [--config <properties-file>] [--check-config]"
+            );
             System.out.println("Required: DISCORD_BOT_TOKEN, DISCORD_GUILD_ID (or corresponding file properties).");
             return;
         }
@@ -28,7 +55,7 @@ public final class BotApplication {
         try {
             Path file = null;
             boolean checkOnly = false;
-            for (int index = 0; index < args.length; index++) {
+            for (int index=0; index<args.length; index++) {
                 if ("--config".equals(args[index]) && file == null && index + 1 < args.length) {
                     file = Path.of(args[++index]);
                 } else if ("--check-config".equals(args[index]) && !checkOnly) {
@@ -61,90 +88,179 @@ public final class BotApplication {
             try {
                 settings = new ChannelSettings(config.stateDirectory().resolve("channel-response.properties"));
             } catch (IOException e) {
-                System.err.println("Channel settings could not be loaded; refusing to start with default settings.");
+                System.err.println(
+                    "Channel settings could not be loaded; refusing to start with default settings."
+                );
                 System.exit(1);
                 return;
             }
             var controls = new ChannelControls(config.guildId(), settings);
             var access = new AiAccess(config.stateDirectory(), aiConfig.roleId());
             var transport = new OpenAiTransport(aiConfig.timeout());
-            var accounts = aiConfig.enabled() ? new ChatGptAccounts(config.stateDirectory().resolve("chatgpt")) : null;
-            var session = aiConfig.enabled() ? new ChatGptSession(accounts, transport, aiConfig.callbackPort()) : null;
+            var accounts = aiConfig.enabled() ?
+                new ChatGptAccounts(config.stateDirectory().resolve("chatgpt")) :
+                null;
+            var session = aiConfig.enabled() ?
+                new ChatGptSession(accounts, transport, aiConfig.callbackPort()) :
+                null;
             var modelPresence = new ModelPresence(config.guildId(), accounts, session, transport);
-            var responseSettings = new ResponseSettings(config.stateDirectory().resolve("response-" + config.guildId() + ".properties"));
-            var limitCommand = new LimitCommandListener(config.guildId(), session, transport,
-                    usageConfig.enabled() ? new CodexUsageClient(usageConfig) : null);
+            var responseSettings = new ResponseSettings(
+                config.stateDirectory().resolve("response-" + config.guildId() + ".properties")
+            );
+            var limitCommand = new LimitCommandListener(
+                config.guildId(),
+                session,
+                transport,
+                usageConfig.enabled() ? new CodexUsageClient(usageConfig) : null
+            );
             var trash = new TrashMessages(config.guildId(), access);
             var limitNotifications = new LimitNotifications(config.guildId(), limitConfig, limitCommand::query);
-            var conversation = aiConfig.enabled() ? new AiConversation(access, controls, session, transport, responseSettings,
-                    new ChatHistory(config.stateDirectory().resolve("recent-chat")), conversationInstructions()) : null;
-            if (conversation != null) conversation.onResponseCompleted(limitNotifications::responseCompleted);
+            var conversation = aiConfig.enabled() ? new AiConversation(
+                access,
+                controls,
+                session,
+                transport,
+                responseSettings,
+                new ChatHistory(config.stateDirectory().resolve("recent-chat")),
+                conversationInstructions()
+            ) : null;
+            if (conversation != null) {
+                conversation.onResponseCompleted(limitNotifications::responseCompleted);
+            }
             GvdListener commands = new GvdListener(controls, conversation);
-            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                trash.close();
-                limitNotifications.close();
-                modelPresence.close();
-                if (conversation != null) conversation.close();
-                if (session != null) session.close();
-                if (accounts != null) try { accounts.close(); } catch (IOException ignored) {}
-            }, "gvd-ai-shutdown"));
+            Runtime.getRuntime().addShutdownHook(
+                new Thread(
+                    () -> {
+                        trash.close();
+                        limitNotifications.close();
+                        modelPresence.close();
+                        if (conversation != null) {
+                            conversation.close();
+                        }
+                        if (session != null) {
+                            session.close();
+                        }
+                        if (accounts != null) {
+                            try {
+                                accounts.close();
+                            } catch (IOException ignored) {
+                            }
+                        }
+                    },
+                    "gvd-ai-shutdown"
+                )
+            );
             var intents = EnumSet.of(GatewayIntent.GUILD_MESSAGES);
-            if (aiConfig.enabled()) intents.addAll(EnumSet.of(GatewayIntent.MESSAGE_CONTENT, GatewayIntent.GUILD_MEMBERS));
+            if (aiConfig.enabled()) {
+                intents.addAll(EnumSet.of(GatewayIntent.MESSAGE_CONTENT, GatewayIntent.GUILD_MEMBERS));
+            }
             CompletableFuture<JDA> ready = new CompletableFuture<>();
             jda = JDABuilder.createLight(config.token(), intents)
-                    .setMemberCachePolicy(aiConfig.enabled() ? net.dv8tion.jda.api.utils.MemberCachePolicy.ALL : net.dv8tion.jda.api.utils.MemberCachePolicy.NONE)
-                    .setChunkingFilter(aiConfig.enabled() ? net.dv8tion.jda.api.utils.ChunkingFilter.ALL : net.dv8tion.jda.api.utils.ChunkingFilter.NONE)
+                    .setMemberCachePolicy(
+                        aiConfig.enabled() ?
+                            net.dv8tion.jda.api.utils.MemberCachePolicy.ALL :
+                            net.dv8tion.jda.api.utils.MemberCachePolicy.NONE
+                    )
+                    .setChunkingFilter(
+                        aiConfig.enabled() ?
+                            net.dv8tion.jda.api.utils.ChunkingFilter.ALL :
+                            net.dv8tion.jda.api.utils.ChunkingFilter.NONE
+                    )
                     .setStatus(OnlineStatus.ONLINE)
                     .setAutoReconnect(true)
                     .setEnableShutdownHook(true)
-                    .addEventListeners(limitCommand, limitNotifications, trash, modelPresence)
-                    .addEventListeners(new ModeCommandListener(config.guildId(), responseSettings, session, conversation))
-                    .addEventListeners(new AiCommands(config.guildId(), aiConfig, access, accounts, session, transport))
-                    .addEventListeners(commands, new ListenerAdapter() {
-                        @Override
-                        public void onReady(ReadyEvent event) {
-                            ready.complete(event.getJDA());
-                        }
+                    .addEventListeners(
+                        limitCommand,
+                        limitNotifications,
+                        trash,
+                        modelPresence
+                    )
+                    .addEventListeners(
+                        new ModeCommandListener(config.guildId(), responseSettings, session, conversation)
+                    )
+                    .addEventListeners(
+                        new AiCommands(config.guildId(), aiConfig, access, accounts, session, transport)
+                    )
+                    .addEventListeners(
+                        commands,
+                        new ListenerAdapter() {
 
-                        @Override
-                        public void onShutdown(ShutdownEvent event) {
-                            ready.completeExceptionally(new IllegalStateException("Gateway shut down during startup."));
+                            @Override
+                            public void onReady(ReadyEvent event) {
+                                ready.complete(event.getJDA());
+                            }
+
+                            @Override
+                            public void onShutdown(ShutdownEvent event) {
+                                ready.completeExceptionally(
+                                    new IllegalStateException("Gateway shut down during startup.")
+                                );
+                            }
                         }
-                    })
+                    )
                     .build();
             ready.get(config.startupTimeout().toSeconds(), TimeUnit.SECONDS);
             if (jda.getGuildById(config.guildId()) == null) {
-                throw new IllegalStateException("Bot is not available in the configured guild. Check its invitation and server ID.");
+                throw new IllegalStateException(
+                    "Bot is not available in the configured guild. Check its invitation and server ID."
+                );
             }
-            System.out.printf("BOT_READY bot_id=%s guild_id=%s status=online%n",
-                    jda.getSelfUser().getId(), config.guildId());
+
+            System.out.printf(
+                "BOT_READY bot_id=%s guild_id=%s status=online%n",
+                jda.getSelfUser().getId(),
+                config.guildId()
+            );
         } catch (IllegalArgumentException | IllegalStateException e) {
-            if (jda != null) jda.shutdownNow();
-            System.err.println("Startup failed: check arguments, Bot authentication, target guild ID, and invitation. Use --help for usage.");
+            if (jda != null) {
+                jda.shutdownNow();
+            }
+            System.err.println(
+                ("Startup failed: check arguments, Bot authentication, target " +
+                    "guild ID, and invitation. Use --help for usage.")
+            );
             System.exit(1);
         } catch (TimeoutException e) {
-            if (jda != null) jda.shutdownNow();
-            System.err.println("Startup failed: Discord READY timed out. Check network access and Bot configuration.");
+            if (jda != null) {
+                jda.shutdownNow();
+            }
+            System.err.println(
+                "Startup failed: Discord READY timed out. Check network access and Bot configuration."
+            );
             System.exit(1);
         } catch (InterruptedException e) {
-            if (jda != null) jda.shutdownNow();
+            if (jda != null) {
+                jda.shutdownNow();
+            }
             Thread.currentThread().interrupt();
             System.err.println("Startup interrupted.");
             System.exit(1);
         } catch (Exception e) {
-            if (jda != null) jda.shutdownNow();
+            if (jda != null) {
+                jda.shutdownNow();
+            }
             // Do not print third-party exception messages, stack traces, or configuration contents.
-            System.err.println("Startup failed (" + e.getClass().getSimpleName()
-                    + "). Check the token, configuration file, and network connection.");
+
+            System.err.println(
+                "Startup failed (" +
+                    e.getClass().getSimpleName() +
+                    "). Check the token, configuration file, and network connection."
+            );
             System.exit(1);
         }
     }
+
     private static String conversationInstructions() throws IOException {
-        StringBuilder text=new StringBuilder();
-        for (String file : new String[]{"README.md", "AGENTS.md"}) {
-            try (var stream=BotApplication.class.getResourceAsStream("/discord-ai/"+file)) {
-                if (stream==null) throw new IOException("Conversation instructions are missing.");
-                text.append(new String(stream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)).append("\n");
+        StringBuilder text = new StringBuilder();
+        for (String file : new String[] { "README.md", "AGENTS.md" }) {
+            try (var stream = BotApplication.class.getResourceAsStream("/discord-ai/" + file)) {
+                if (stream == null) {
+                    throw new IOException("Conversation instructions are missing.");
+                }
+
+                text.append(new String(stream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)).append(
+                    "\n"
+                );
             }
         }
         return text.toString();
