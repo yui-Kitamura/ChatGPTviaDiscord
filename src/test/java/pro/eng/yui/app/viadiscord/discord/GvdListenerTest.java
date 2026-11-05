@@ -38,6 +38,34 @@ public class GvdListenerTest {
     public ChannelControls controls;
     GvdListener listener;
     public MessageReceivedEvent messageEvent;
+
+    @Test
+    void forwardsSingleAndBulkDeletesEvenWhenChannelIsSkippedButRejectsOtherGuilds() throws Exception {
+        var ai = mock(pro.eng.yui.app.viadiscord.core.AiConversation.class, withSettings().mockMaker(org.mockito.MockMakers.INLINE));
+        var listener = new GvdListener(controls, ai);
+        controls.update(GUILD, "skipch", CHANNEL);
+        var single = mock(net.dv8tion.jda.api.events.message.MessageDeleteEvent.class);
+        when(single.isFromGuild()).thenReturn(true);
+        when(single.getGuild()).thenReturn(guild);
+        var sourceChannel = messageEvent.getChannel();
+        when(single.getChannel()).thenReturn(sourceChannel);
+        when(single.getMessageId()).thenReturn("deleted");
+        listener.onMessageDelete(single);
+        verify(ai).deleted(CHANNEL, java.util.List.of("deleted"));
+        var bulk = mock(net.dv8tion.jda.api.events.message.MessageBulkDeleteEvent.class);
+        when(bulk.getGuild()).thenReturn(guild);
+        var bulkChannel = mock(net.dv8tion.jda.api.entities.channel.unions.GuildMessageChannelUnion.class);
+        when(bulkChannel.getId()).thenReturn(CHANNEL);
+        when(bulk.getChannel()).thenReturn(bulkChannel);
+        when(bulk.getMessageIds()).thenReturn(java.util.List.of("one", "two"));
+        listener.onMessageBulkDelete(bulk);
+        verify(ai).deleted(CHANNEL, java.util.List.of("one", "two"));
+        clearInvocations(ai);
+        when(guild.getId()).thenReturn("another-guild");
+        listener.onMessageDelete(single);
+        listener.onMessageBulkDelete(bulk);
+        verifyNoInteractions(ai);
+    }
     public Message message;
     public User user;
     public MessageCreateAction reply;

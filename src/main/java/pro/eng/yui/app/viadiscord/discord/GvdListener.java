@@ -8,6 +8,8 @@ import net.dv8tion.jda.api.entities.channel.ChannelType;
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
 import net.dv8tion.jda.api.events.interaction.component.ButtonInteractionEvent;
 import net.dv8tion.jda.api.events.message.MessageReceivedEvent;
+import net.dv8tion.jda.api.events.message.MessageDeleteEvent;
+import net.dv8tion.jda.api.events.message.MessageBulkDeleteEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import net.dv8tion.jda.api.interactions.commands.OptionMapping;
 import net.dv8tion.jda.api.requests.restaction.MessageCreateAction;
@@ -26,6 +28,21 @@ public final class GvdListener extends ListenerAdapter {
     public GvdListener(ChannelControls controls, java.util.function.Consumer<MessageReceivedEvent> conversation) {
         this.controls = controls;
         this.conversation = conversation;
+    }
+
+    @Override
+    public void onMessageDelete(MessageDeleteEvent event) {
+        if (event.isFromGuild() && controls.acceptsGuild(event.getGuild().getId()) &&
+            conversation instanceof AiConversation ai) {
+            ai.deleted(event.getChannel().getId(), List.of(event.getMessageId()));
+        }
+    }
+
+    @Override
+    public void onMessageBulkDelete(MessageBulkDeleteEvent event) {
+        if (controls.acceptsGuild(event.getGuild().getId()) && conversation instanceof AiConversation ai) {
+            ai.deleted(event.getChannel().getId(), event.getMessageIds());
+        }
     }
 
     @Override

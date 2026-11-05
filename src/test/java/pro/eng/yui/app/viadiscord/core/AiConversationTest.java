@@ -51,6 +51,58 @@ class AiConversationTest {
     Path directory;
     static final String ROLE = "1565364891676713192", USER = "123456789012345678";
 
+    @Test
+    void deleteDuringGenerationDiscardsResponseAndNeverRestoresHistory() throws Exception {
+        var transport = mock(OpenAiTransport.class);
+        var active = new AtomicReference<AiConversation>();
+        var called = new CountDownLatch(1);
+        when(transport.respond(anyString(), anyString(), anyString(), anyList(), any(OpenAiTransport.Progress.class)))
+                .thenAnswer(i -> {
+                    active.get().deleted(ChannelControlsTest.CHANNEL, List.of("deleted"));
+                    called.countDown();
+                    return "answer quoting deleted input";
+                });
+        var h = event(USER, true, "deleted", "private input");
+        var history = new ChatHistory(directory.resolve("history"));
+        try (var accounts = new ChatGptAccounts(directory.resolve("auth"));
+            var session = new ChatGptSession(accounts, transport, 0)) {
+            account(accounts);
+            try (var ai = new AiConversation(
+                new AiAccess(directory, ROLE), h.controls, session, transport,
+                new ResponseSettings(directory.resolve("mode.properties")), history, "guide"
+            )) {
+                active.set(ai);
+                ai.accept(h.messageEvent);
+                assertTrue(called.await(5, TimeUnit.SECONDS));
+                ai.switchMode(h.guild, h.messageEvent.getChannel(), ResponseMode.QA).get(5, TimeUnit.SECONDS);
+            }
+        }
+        verify(h.message, never()).reply(anyString());
+        String key = ChannelControlsTest.CHANNEL + "-" +
+            UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        assertTrue(history.load(key).turns.isEmpty());
+    }
+
+    @Test
+    void deletedPendingRequestIsNotSentToProvider() throws Exception {
+        var transport = mock(OpenAiTransport.class);
+        var h = event(USER, true, "pending", "private input");
+        try (var accounts = new ChatGptAccounts(directory.resolve("auth"));
+            var session = new ChatGptSession(accounts, transport, 0)) {
+            account(accounts);
+            try (var ai = new AiConversation(
+                new AiAccess(directory, ROLE), h.controls, session, transport,
+                new ResponseSettings(directory.resolve("mode.properties")),
+                new ChatHistory(directory.resolve("history")), "guide"
+            )) {
+                ai.accept(h.messageEvent);
+                ai.deleted(ChannelControlsTest.CHANNEL, List.of("pending"));
+                ai.switchMode(h.guild, h.messageEvent.getChannel(), ResponseMode.QA).get(5, TimeUnit.SECONDS);
+            }
+        }
+        verify(transport, never()).respond(anyString(), anyString(), anyString(), anyList(), any());
+    }
+
     GvdListenerTest event(String user, boolean allowed, String id, String content) throws Exception {
         var h = new GvdListenerTest();
         h.directory = directory;

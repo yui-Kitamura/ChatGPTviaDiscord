@@ -15,18 +15,31 @@ public final class ChatHistory {
         public List<String> ids = new ArrayList<>();
         public long nextPost = 1;
         public Map<Long, String> postMessages = new LinkedHashMap<>();
+        public Map<String, Integer> messageTurns = new LinkedHashMap<>();
+        @com.fasterxml.jackson.annotation.JsonIgnore
+        private long revision;
 
         public History() {
         }
     }
 
     private final Path directory;
+    private final Map<String, Long> revisions = new HashMap<>();
+    private final Set<String> blockedChannels = new HashSet<>();
+
+    public static final class Invalidated extends IOException {
+
+        Invalidated() {
+            super("Discord messages were deleted while processing this history.");
+        }
+    }
 
     public ChatHistory(Path directory) {
         this.directory = directory;
     }
 
     public synchronized String replyBody(String key, String messageId) throws IOException {
+        requireReadable(key);
         return replies(key).get(messageId);
     }
 
@@ -52,7 +65,20 @@ public final class ChatHistory {
         return path(key).resolveSibling(key + ".replies.json");
     }
 
-    public History load(String key) throws IOException {
+    public synchronized History load(String key) throws IOException {
+        requireReadable(key);
+        return read(key);
+    }
+
+    private void requireReadable(String key) throws IOException {
+        path(key);
+        String channelId = key.split("-", 2)[0];
+        if (blockedChannels.contains(channelId) || Files.exists(pendingPath(channelId))) {
+            throw new IOException("Discord history deletion has not completed.");
+        }
+    }
+
+    private History read(String key) throws IOException {
         var file = path(key);
         var value = Files.exists(file) ?
             ChatGptAccounts.JSON.readValue(Files.readString(file), History.class) :
@@ -60,6 +86,10 @@ public final class ChatHistory {
         if (value.postMessages == null) {
             value.postMessages = new LinkedHashMap<>();
         }
+        if (value.messageTurns == null) {
+            value.messageTurns = new LinkedHashMap<>();
+        }
+        value.revision = revision(key);
         if (value.turns == null ||
             value.ids == null ||
             value.turns.size() > 40 ||
@@ -74,15 +104,151 @@ public final class ChatHistory {
                 throw new IOException("Invalid history item.");
             }
         }
+        if (value.messageTurns.values().stream().anyMatch(index ->
+            index == null || index < 0 || index >= value.turns.size())) {
+            throw new IOException("Invalid Discord message history mapping.");
+        }
         return value;
     }
 
-    public void save(String key, History history) throws IOException {
+    public synchronized void save(String key, History history) throws IOException {
+        requireCurrent(key, history);
+        int previousSize = history.turns.size();
         trim(history.turns);
+        int removed = previousSize - history.turns.size();
+        history.messageTurns.replaceAll((id, index) -> index - removed);
+        history.messageTurns.values().removeIf(index -> index < 0 || index >= history.turns.size());
         while (history.ids.size() > 200) {
             history.ids.remove(0);
         }
         PrivateFiles.write(path(key), ChatGptAccounts.JSON.writeValueAsString(history));
+    }
+
+    public synchronized void requireCurrent(String key, History history) throws Invalidated {
+        if (history.revision != revision(key)) {
+            throw new Invalidated();
+        }
+    }
+
+    private long revision(String key) {
+        return revisions.getOrDefault(key.split("-", 2)[0], 0L);
+    }
+
+    public synchronized void saveReply(String key, History history, String messageId, String body)
+        throws IOException {
+        requireCurrent(key, history);
+        var current = load(key);
+        String sourceId = history.ids.isEmpty() ? "" : history.ids.getLast();
+        Integer index = current.messageTurns.get(sourceId);
+        if (index != null) {
+            current.messageTurns.merge(messageId, index, Math::min);
+            save(key, current);
+            // Synchronous thread delivery saves the same snapshot after each post.
+            history.messageTurns.merge(messageId, Math.max(0, history.turns.size() - 2), Math::min);
+        }
+        saveReply(key, messageId, body);
+    }
+
+    /**
+     * Later answers may quote deleted input, so retain only the unaffected prefix.
+     * Advance the revision even before the first save to invalidate in-flight answers.
+     */
+    public synchronized void deleted(String channelId, Collection<String> messageIds) throws IOException {
+        if (!channelId.matches("[0-9]+")) {
+            throw new IllegalArgumentException("Invalid channel ID.");
+        }
+        revisions.merge(channelId, 1L, Long::sum);
+        if (!Files.isDirectory(directory)) {
+            return;
+        }
+
+        blockedChannels.add(channelId);
+        var pending = new HashSet<>(messageIds);
+        if (Files.exists(pendingPath(channelId))) {
+            pending.addAll(ChatGptAccounts.JSON.readValue(
+                Files.readString(pendingPath(channelId)),
+                new com.fasterxml.jackson.core.type.TypeReference<Set<String>>() {
+                }
+            ));
+        }
+        PrivateFiles.write(pendingPath(channelId), ChatGptAccounts.JSON.writeValueAsString(pending));
+
+        IOException failure = null;
+        var visited = new HashSet<String>();
+        try (var files = Files.newDirectoryStream(directory, channelId + "-*.json")) {
+            for (var file : files) {
+                String name = file.getFileName().toString();
+                String key = name.substring(0, name.length() -
+                    (name.endsWith(".replies.json") ? ".replies.json".length() : ".json".length()));
+                if (!visited.add(key)) {
+                    continue;
+                }
+                try {
+                    deleteFrom(key, pending);
+                } catch (IOException error) {
+                    // Continue cleaning other accounts in the same channel.
+                    if (failure == null) {
+                        failure = error;
+                    } else {
+                        failure.addSuppressed(error);
+                    }
+                }
+            }
+        }
+        if (failure != null) {
+            throw failure;
+        }
+        Files.deleteIfExists(pendingPath(channelId));
+        blockedChannels.remove(channelId);
+    }
+
+    private Path pendingPath(String channelId) {
+        return directory.resolve(channelId + ".deletion-pending.json");
+    }
+
+    private void deleteFrom(String key, Collection<String> messageIds) throws IOException {
+        var saved = read(key);
+        var replies = replies(key);
+        int cut = saved.turns.size();
+        boolean matched = false;
+        for (String id : messageIds) {
+            Integer index = saved.messageTurns.get(id);
+            if (index != null) {
+                matched = true;
+                cut = Math.min(cut, index);
+            } else if (saved.ids.contains(id) || replies.containsKey(id) || saved.postMessages.containsValue(id)) {
+                // Legacy history has no per-turn Discord IDs.
+                matched = true;
+                cut = 0;
+            }
+        }
+        if (matched == false) {
+            return;
+        }
+        if (cut < saved.turns.size() && "assistant".equals(saved.turns.get(cut).get("role")) && cut > 0) {
+            cut--;
+        }
+        int firstRemoved = cut;
+        var removedIds = new HashSet<>(messageIds);
+        saved.messageTurns.forEach((id, index) -> {
+            if (index >= firstRemoved) {
+                removedIds.add(id);
+            }
+        });
+        if (cut == 0) {
+            removedIds.addAll(replies.keySet());
+            saved.ids.clear();
+            saved.postMessages.clear();
+        }
+        saved.turns.subList(cut, saved.turns.size()).clear();
+        saved.messageTurns.keySet().removeAll(removedIds);
+        saved.ids.removeAll(removedIds);
+        saved.postMessages.values().removeAll(removedIds);
+        replies.keySet().removeAll(removedIds);
+        // Keep nextPost monotonic: surviving Discord posts must not acquire duplicate numbers.
+        // Clear cached bodies first; on failure the original mapping remains available for retry.
+        PrivateFiles.write(replyPath(key), ChatGptAccounts.JSON.writeValueAsString(replies));
+        save(key, saved);
     }
 
     /**

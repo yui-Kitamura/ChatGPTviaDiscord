@@ -49,6 +49,7 @@ public final class AiConversation implements java.util.function.Consumer<Message
     private final Function<Guild, CharacterRoles.RoleGateway> roleGateway;
     private CharacterRoles characterRoles;
     private final Set<MessageFeedback> feedbacks = ConcurrentHashMap.newKeySet();
+    private final Map<MessageReceivedEvent, Boolean> deletedRequests = new WeakHashMap<>();
     private Runnable responseCompleted = () -> {
     };
 
@@ -119,7 +120,34 @@ public final class AiConversation implements java.util.function.Consumer<Message
             return;
         }
 
+        synchronized (deletedRequests) {
+            deletedRequests.put(event, false);
+        }
         batches.accept(event);
+    }
+
+    public void deleted(String channelId, Collection<String> messageIds) {
+        synchronized (deletedRequests) {
+            deletedRequests.replaceAll((event, deleted) -> deleted ||
+                (channelId.equals(event.getChannel().getId()) && messageIds.contains(event.getMessage().getId())));
+        }
+        synchronized (retries) {
+            retries.values().removeIf(request -> channelId.equals(request.original().getChannel().getId()) &&
+                (messageIds.contains(request.replyId()) || request.batch().stream().anyMatch(
+                    event -> messageIds.contains(event.getMessage().getId())
+                )));
+        }
+        try {
+            history.deleted(channelId, messageIds);
+        } catch (java.io.IOException error) {
+            FailureDiagnostics.log("HISTORY_DELETE", error, channelId);
+        }
+    }
+
+    private boolean deleted(List<MessageReceivedEvent> batch) {
+        synchronized (deletedRequests) {
+            return batch.stream().anyMatch(event -> Boolean.TRUE.equals(deletedRequests.get(event)));
+        }
     }
 
     private boolean permits(MessageReceivedEvent event, net.dv8tion.jda.api.entities.Member member) {
@@ -214,6 +242,7 @@ public final class AiConversation implements java.util.function.Consumer<Message
                             throw new ChatGptException("login_required", 0);
                         }
 
+                        history.requireCurrent(key, saved);
                         String firstPost = "## " + title + "\n>>1";
                         var sent = channel.sendMessage(firstPost).setAllowedMentions(List.of()).complete();
                         saved.nextPost = 2;
@@ -222,6 +251,8 @@ public final class AiConversation implements java.util.function.Consumer<Message
                         // Keep prior turns for title generation only; the new thread starts at this >>1.
 
                         saved.turns = new ArrayList<>();
+                        saved.messageTurns.clear();
+                        saved.messageTurns.put(sent.getId(), 0);
                         saved.turns.add(
                             ChatTimestamps.turn(
                                 "user",
@@ -297,6 +328,9 @@ public final class AiConversation implements java.util.function.Consumer<Message
                 }
                 String key = historyKey(event.getChannel().getId(), account);
                 var saved = history.load(key);
+                if (deleted(batch)) {
+                    return;
+                }
                 if (batch.stream().anyMatch(e -> saved.ids.contains(e.getMessage().getId()))) {
                     return;
                 }
@@ -368,7 +402,9 @@ public final class AiConversation implements java.util.function.Consumer<Message
                     feedback.reply("visitor のAI呼び出しは1人60秒に1回までです。時間を置いて再投稿してください。");
                     return;
                 }
+                history.requireCurrent(key, saved);
                 String response = transport.respond(account.accessToken, account.model, prompt, input, feedback);
+                history.requireCurrent(key, saved);
                 var responseTime = OffsetDateTime.now();
                 if (!session.isCurrent(event.getGuild().getId(), account) ||
                     !permits(event, event.getGuild().getMemberById(user)) ||
@@ -418,6 +454,15 @@ public final class AiConversation implements java.util.function.Consumer<Message
                     saved.nextPost += 1 + generated.posts().size();
                 }
                 input.set(input.size() - 1, ChatTimestamps.turn("user", userContent, message.getTimeCreated()));
+                int removedTurns = saved.turns.size() + 1 - input.size();
+                saved.messageTurns.replaceAll((id, index) -> index - removedTurns);
+                saved.messageTurns.values().removeIf(index -> index < 0);
+                int userTurn = input.size() - 1;
+                batch.forEach(e -> saved.messageTurns.merge(e.getMessage().getId(), userTurn, Math::min));
+                var reference = message.getMessageReference();
+                if (reference != null && event.getChannel().getId().equals(reference.getChannelId())) {
+                    saved.messageTurns.merge(reference.getMessageId(), userTurn, Math::min);
+                }
                 saved.turns = input;
                 saved.turns.add(ChatTimestamps.turn("assistant", response, responseTime));
                 batch.forEach(e -> saved.ids.add(e.getMessage().getId()));
@@ -430,7 +475,7 @@ public final class AiConversation implements java.util.function.Consumer<Message
                         responseCompleted,
                         sent -> {
                             try {
-                                history.saveReply(key, sent.getId(), display);
+                                history.saveReply(key, saved, sent.getId(), display);
                             } catch (java.io.IOException error) {
                                 FailureDiagnostics.log("REPLY_CONTEXT_SAVE", error, sent.getId());
                             }
@@ -444,7 +489,7 @@ public final class AiConversation implements java.util.function.Consumer<Message
                         roles,
                         saved,
                         () -> history.save(key, saved),
-                        (id, body) -> history.saveReply(key, id, body),
+                        (id, body) -> history.saveReply(key, saved, id, body),
                         sourceNote
                     );
                     responseCompleted.run();
@@ -452,6 +497,8 @@ public final class AiConversation implements java.util.function.Consumer<Message
             } catch (AttachmentInput.Unavailable error) {
                 FailureDiagnostics.log("ATTACHMENT", error);
                 feedback.reply(error.getMessage());
+            } catch (ChatHistory.Invalidated ignored) {
+                // Deletion invalidates the entire in-flight response, including derived content.
             } catch (ChannelHistoryContext.Unavailable error) {
                 FailureDiagnostics.log("CHANNEL_HISTORY", error);
                 feedback.reply(error.getMessage());
