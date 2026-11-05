@@ -38,6 +38,7 @@ import pro.eng.yui.app.viadiscord.discord.MessageInputTest;
 import pro.eng.yui.app.viadiscord.discord.ServerModelContextTest;
 import pro.eng.yui.app.viadiscord.discord.SpeakerAboutContextTest;
 import pro.eng.yui.app.viadiscord.discord.VisitorAccessTest;
+import pro.eng.yui.app.viadiscord.discord.VisitorHistoryContextTest;
 import pro.eng.yui.app.viadiscord.domain.model.CharacterReplyTest;
 import pro.eng.yui.app.viadiscord.domain.model.CharacterSpec;
 import pro.eng.yui.app.viadiscord.domain.model.ResponseMode;
@@ -50,6 +51,75 @@ class AiConversationTest {
     @TempDir
     Path directory;
     static final String ROLE = "1565364891676713192", USER = "123456789012345678";
+
+    @Test
+    void visitorChannelRebuildsProviderHistoryWithoutPersistingContextOrReusingOldIdentity() throws Exception {
+        var captured = new AtomicReference<List<Map<String, Object>>>();
+        var transport = mock(OpenAiTransport.class);
+        when(transport.respond(anyString(), anyString(), anyString(), anyList(), any(OpenAiTransport.Progress.class)))
+                .thenAnswer(i -> {
+                    captured.set(List.copyOf(i.getArgument(3)));
+                    return "answer";
+                });
+        var h = event(USER, true, "3", "今回の依頼");
+        var sentMessage = h.reply.complete();
+        doAnswer(i -> {
+            i.<java.util.function.Consumer<Message>>getArgument(0).accept(sentMessage);
+            return null;
+        }).when(h.reply).queue(any(), any());
+        var plain = ChannelHistoryContextTest.post("1", "間のメンションなし発言", false);
+        VisitorHistoryContextTest.history(h.guild, h.messageEvent.getMember(), ChannelControlsTest.CHANNEL, "3", plain);
+        var history = new ChatHistory(directory.resolve("history"));
+        String key = ChannelControlsTest.CHANNEL + "-" +
+            UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        var saved = history.load(key);
+        saved.turns.add(Map.of("role", "user", "content", "obsolete-role-snapshot"));
+        saved.turns.add(Map.of("role", "assistant", "content", "obsolete-answer"));
+        history.save(key, saved);
+        var access = new AiAccess(directory, ROLE);
+        access.visitors.setChannel(ChannelControlsTest.CHANNEL);
+        try(var accounts = new ChatGptAccounts(directory.resolve("auth"));
+            var session = new ChatGptSession(accounts, transport, 0)) {
+            account(accounts);
+            try(var ai = new AiConversation(
+                access, h.controls, session, transport,
+                new ResponseSettings(directory.resolve("mode.properties")), history, "guide"
+            )) {
+                var done = new CountDownLatch(1);
+                ai.onResponseCompleted(done::countDown);
+                ai.accept(h.messageEvent);
+                assertTrue(done.await(5, TimeUnit.SECONDS));
+            }
+        }
+        assertEquals(1, captured.get().size());
+        String sent = ChatGptAccounts.JSON.writeValueAsString(captured.get());
+        assertTrue(sent.contains("間のメンションなし発言"));
+        assertTrue(sent.contains("今回の依頼"));
+        assertFalse(sent.contains("obsolete-role-snapshot"));
+        assertFalse(sent.contains("obsolete-answer"));
+        assertFalse(ChatGptAccounts.JSON.writeValueAsString(history.load(key)).contains("間のメンションなし発言"));
+    }
+
+    @Test
+    void unmentionedVisitorSpeechDoesNotStartGenerationOrFetchHistory() throws Exception {
+        var h = event(USER, false, "1", "普通の発言");
+        var member = VisitorAccessTest.visitor();
+        when(h.messageEvent.getMember()).thenReturn(member);
+        var access = new AiAccess(directory, ROLE);
+        access.visitors.setChannel(ChannelControlsTest.CHANNEL);
+        var transport = mock(OpenAiTransport.class);
+        try(var accounts = new ChatGptAccounts(directory.resolve("auth"));
+            var session = new ChatGptSession(accounts, transport, 0);
+            var ai = new AiConversation(
+                access, h.controls, session, transport,
+                new ResponseSettings(directory.resolve("mode.properties")),
+                new ChatHistory(directory.resolve("history")), "guide"
+            )) {
+            new GvdListener(h.controls, ai).onMessageReceived(h.messageEvent);
+        }
+        verifyNoInteractions(transport);
+        verify(h.guild, never()).getGuildChannelById(anyString());
+    }
 
     @Test
     void deleteDuringGenerationDiscardsResponseAndNeverRestoresHistory() throws Exception {
@@ -352,6 +422,8 @@ class AiConversationTest {
             var second = event(USER, false, "visitor-second-post", "question");
             when(second.messageEvent.getMember()).thenReturn(member);
             when(second.guild.getMemberById(USER)).thenReturn(member);
+            VisitorHistoryContextTest.history(h.guild, member, ChannelControlsTest.CHANNEL, "visitor-post");
+            VisitorHistoryContextTest.history(second.guild, member, ChannelControlsTest.CHANNEL, "visitor-second-post");
             when(second.message.getChannel()).thenReturn(channel);
             when(second.message.getGuild()).thenReturn(second.guild);
             second.mentionBot("<@" + GvdListenerTest.BOT + ">");
