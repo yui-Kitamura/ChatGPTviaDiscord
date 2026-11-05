@@ -39,7 +39,7 @@ class ChatHistoryTest {
         assertEquals(2, saved.turns.size());
         assertEquals(List.of("user0"), saved.ids);
         assertEquals(Map.of("user0", 0, "bot0", 1), saved.messageTurns);
-        assertEquals(Map.of(1L, "bot0"), saved.postMessages);
+        assertEquals(Map.of(1L, "bot0", 2L, "bot1", 3L, "bot2"), saved.postMessages);
         assertEquals(4, saved.nextPost);
         assertEquals("answer0", restarted.replyBody(KEY, "bot0"));
         assertNull(restarted.replyBody(KEY, "bot1"));
@@ -56,6 +56,44 @@ class ChatHistoryTest {
         history.deleted("123", List.of("bot1", "bot2"));
         assertEquals(2, history.load(KEY).turns.size());
         assertEquals(2, history.load("123-def").turns.size());
+        assertEquals(2, history.load(KEY).nextPost);
+        assertEquals(Map.of(1L, "bot0"), history.load(KEY).postMessages);
+        assertEquals(2, history.load("123-def").nextPost);
+    }
+
+    @Test
+    void deletingInteriorPostPreservesGapAndSurvivingLaterPostNumbers() throws Exception {
+        var history = new ChatHistory(directory);
+        exchanges(history, KEY);
+        history.deleted("123", List.of("bot1"));
+        var restarted = new ChatHistory(directory).load(KEY);
+        assertEquals(4, restarted.nextPost);
+        assertEquals(Map.of(1L, "bot0", 3L, "bot2"), restarted.postMessages);
+        assertEquals(2, restarted.turns.size());
+    }
+
+    @Test
+    void deletingLatestPostReusesItsNumberAfterRestart() throws Exception {
+        var history = new ChatHistory(directory);
+        exchanges(history, KEY);
+        history.deleted("123", List.of("bot2"));
+        var restarted = new ChatHistory(directory).load(KEY);
+        assertEquals(3, restarted.nextPost);
+        assertEquals(Map.of(1L, "bot0", 2L, "bot1"), restarted.postMessages);
+        assertEquals(4, restarted.turns.size());
+    }
+
+    @Test
+    void deletingTailAfterInteriorDeletionContinuesFromActualLastPost() throws Exception {
+        var history = new ChatHistory(directory);
+        exchanges(history, KEY);
+        history.deleted("123", List.of("bot1"));
+        history.deleted("123", List.of("bot2"));
+        assertEquals(2, history.load(KEY).nextPost);
+        assertEquals(Map.of(1L, "bot0"), history.load(KEY).postMessages);
+        history.deleted("123", List.of("bot0"));
+        assertEquals(1, history.load(KEY).nextPost);
+        assertTrue(history.load(KEY).postMessages.isEmpty());
     }
 
     @Test

@@ -238,14 +238,15 @@ public final class ChatHistory {
         if (cut == 0) {
             removedIds.addAll(replies.keySet());
             saved.ids.clear();
-            saved.postMessages.clear();
         }
         saved.turns.subList(cut, saved.turns.size()).clear();
         saved.messageTurns.keySet().removeAll(removedIds);
         saved.ids.removeAll(removedIds);
-        saved.postMessages.values().removeAll(removedIds);
+        // Conversation invalidation does not delete surviving Discord posts.
+        // Only actual deletion changes the numbering registry; interior gaps stay gaps.
+        saved.postMessages.values().removeAll(messageIds);
+        saved.nextPost = saved.postMessages.keySet().stream().mapToLong(Long::longValue).max().orElse(0) + 1;
         replies.keySet().removeAll(removedIds);
-        // Keep nextPost monotonic: surviving Discord posts must not acquire duplicate numbers.
         // Clear cached bodies first; on failure the original mapping remains available for retry.
         PrivateFiles.write(replyPath(key), ChatGptAccounts.JSON.writeValueAsString(replies));
         save(key, saved);
