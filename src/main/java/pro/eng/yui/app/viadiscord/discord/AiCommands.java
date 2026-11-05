@@ -230,7 +230,8 @@ public final class AiCommands extends ListenerAdapter {
                                 hook,
                                 "<#" + channel.getId() +
                                     ("> をvisitorチャンネルに設定しました。" +
-                                        "GvDvisitor ロールの人はBot・生成キャラロールへの明示メンションでAIを呼べます（1人60秒に1回）。")
+                                        "GvDvisitor ロールの人はBot・生成キャラロールへの明示メンションでAIを呼べます" +
+                                        "（1人60秒に1回。/gvd role 登録ロールを持つ人は制限対象外）。")
                             );
                         } catch (java.io.IOException e) {
                             FailureDiagnostics.log("VISITOR_SAVE", e, event.getId());

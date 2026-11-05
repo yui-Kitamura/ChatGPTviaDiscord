@@ -302,10 +302,14 @@ class AiConversationTest {
     }
 
     @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.CsvSource({ "false,false", "false,true", "true,false", "true,true" })
-    void visitorWithoutNormalRoleReachesProviderAndSecondCallIsThrottled(
+    @org.junit.jupiter.params.provider.CsvSource({
+        "false,false,false", "false,true,false", "true,false,false", "true,true,false",
+        "false,false,true", "false,true,true", "true,false,true", "true,true,true"
+    })
+    void visitorRateLimitExemptsOnlyMembersWithLinkedSpeakerRole(
         boolean threadMode,
-        boolean roleMention
+        boolean roleMention,
+        boolean linkedSpeaker
     ) throws Exception {
         var transport = mock(OpenAiTransport.class);
         when(
@@ -348,6 +352,8 @@ class AiConversationTest {
             var second = event(USER, false, "visitor-second-post", "question");
             when(second.messageEvent.getMember()).thenReturn(member);
             when(second.guild.getMemberById(USER)).thenReturn(member);
+            when(second.message.getChannel()).thenReturn(channel);
+            when(second.message.getGuild()).thenReturn(second.guild);
             second.mentionBot("<@" + GvdListenerTest.BOT + ">");
             var throttled = new CountDownLatch(1);
             doAnswer(
@@ -391,10 +397,14 @@ class AiConversationTest {
                 var listener = new GvdListener(h.controls, ai);
                 listener.onMessageReceived(h.messageEvent);
                 assertTrue(done.await(5, TimeUnit.SECONDS));
+                // The first call consumed a visitor slot. A different registered role grants no exemption.
+                settings.setSpeakerRole("guest", linkedSpeaker ? USER : ROLE);
+                var secondDone = new CountDownLatch(1);
+                ai.onResponseCompleted(secondDone::countDown);
                 listener.onMessageReceived(second.messageEvent);
-                assertTrue(throttled.await(5, TimeUnit.SECONDS));
+                assertTrue((linkedSpeaker ? secondDone : throttled).await(5, TimeUnit.SECONDS));
             }
-            verify(transport, times(1)).respond(
+            verify(transport, times(linkedSpeaker ? 2 : 1)).respond(
                 anyString(),
                 anyString(),
                 anyString(),
@@ -406,7 +416,11 @@ class AiConversationTest {
                 }),
                 any(OpenAiTransport.Progress.class)
             );
-            verify(second.message).reply(contains("60秒"));
+            if(linkedSpeaker) {
+                verify(second.message, never()).reply(contains("60秒"));
+            } else {
+                verify(second.message).reply(contains("60秒"));
+            }
         }
     }
 
