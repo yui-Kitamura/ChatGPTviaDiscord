@@ -69,6 +69,11 @@ public class ForwardSourceContextTest {
 
     @Test
     void includesBothSidesInChronologicalOrderWithAuthorTimeAndLinks() {
+        when(channel.getName()).thenReturn("相談");
+        when(channel.getId()).thenReturn("channel");
+        var category = mock(net.dv8tion.jda.api.entities.channel.concrete.Category.class);
+        when(category.getName()).thenReturn("開発");
+        when(channel.getParentCategory()).thenReturn(category);
         source(
             post(100, "元本文"),
             List.of(post(99, "直前"), post(98, "前の相談")),
@@ -84,6 +89,7 @@ public class ForwardSourceContextTest {
         assertTrue(result.contains("2026-10-30 08:00:00 +09:00 JST"));
         assertTrue(result.contains("https://discord.com/channels/guild/channel/101"));
         assertTrue(result.contains("全履歴ではありません"));
+        assertTrue(result.contains("--- #開発：相談 (channel_id=channel) ---"));
     }
 
     @Test
@@ -129,6 +135,7 @@ public class ForwardSourceContextTest {
         assertTrue(ForwardSourceContext.load(guild, requester, List.of(forward)).contains("未取得"));
         verify(thread, never()).retrieveMessageById(anyString());
         when(botAction.complete()).thenReturn(mock(ThreadMember.class));
+        when(thread.getParentChannel()).thenReturn(mock(net.dv8tion.jda.api.entities.channel.unions.IThreadContainerUnion.class));
         source(thread, post(100, "非公開の資料"), List.of(), List.of());
         assertTrue(ForwardSourceContext.load(guild, requester, List.of(forward)).contains("非公開の資料"));
     }

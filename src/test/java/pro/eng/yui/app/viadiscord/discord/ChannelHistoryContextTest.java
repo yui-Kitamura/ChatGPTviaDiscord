@@ -28,6 +28,7 @@ public class ChannelHistoryContextTest {
         when(guild.getSelfMember()).thenReturn(bot);
         when(guild.getGuildChannelById(ID)).thenReturn(channel);
         when(channel.getName()).thenReturn("臼井阿原");
+        when(channel.getId()).thenReturn(ID);
         when(channel.getHistory()).thenReturn(history);
         when(requester.hasPermission(channel, Permission.VIEW_CHANNEL, Permission.MESSAGE_HISTORY)).thenReturn(
             true
@@ -55,6 +56,9 @@ public class ChannelHistoryContextTest {
     @Test
     void readsMentionOnceAndIncludesChronologicalHumanAndBotPostsWithSources() throws Exception {
         var request = setup(post("2", "決まったこと", true), post("1", "相談内容", false));
+        var category = mock(net.dv8tion.jda.api.entities.channel.concrete.Category.class);
+        when(category.getName()).thenReturn("地域");
+        when(channel.getParentCategory()).thenReturn(category);
         String result = ChannelHistoryContext.load(guild, requester, "<#" + ID + "> の内容readback <#" + ID + ">");
         assertTrue(result.indexOf("相談内容") < result.indexOf("決まったこと"));
         assertTrue(result.contains("user_id=user, bot=false"));
@@ -62,6 +66,7 @@ public class ChannelHistoryContextTest {
         assertTrue(result.contains("2026-10-30 08:00:00 +09:00 JST"));
         assertTrue(result.contains("https://discord.com/channels/guild/" + ID + "/1"));
         assertTrue(result.contains("取得投稿数: 2"));
+        assertTrue(result.contains("--- #地域：臼井阿原 (channel_id="+ ID +") ---"));
         verify(request, times(1)).complete();
     }
 
