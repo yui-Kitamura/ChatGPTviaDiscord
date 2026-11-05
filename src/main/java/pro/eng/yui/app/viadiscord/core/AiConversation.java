@@ -399,7 +399,12 @@ public final class AiConversation implements java.util.function.Consumer<Message
                     return;
                 }
 
-                if (!access.permits(currentMember) && !access.visitors.acquire(user)) {
+                boolean linkedSpeaker = currentMember.getRoles().stream().anyMatch(
+                    role -> !settings.speakerName(role.getId()).isEmpty()
+                );
+                if (access.permits(currentMember) == false &&
+                    linkedSpeaker == false &&
+                    access.visitors.acquire(user) == false) {
                     feedback.reply("visitor のAI呼び出しは1人60秒に1回までです。時間を置いて再投稿してください。");
                     return;
                 }
