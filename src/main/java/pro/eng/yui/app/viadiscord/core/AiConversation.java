@@ -28,6 +28,7 @@ import pro.eng.yui.app.viadiscord.discord.ForwardMessageBatcher;
 import pro.eng.yui.app.viadiscord.discord.ForwardSourceContext;
 import pro.eng.yui.app.viadiscord.discord.MessageFeedback;
 import pro.eng.yui.app.viadiscord.discord.MessageInput;
+import pro.eng.yui.app.viadiscord.discord.SpeakerIdentity;
 import pro.eng.yui.app.viadiscord.discord.ServerModelContext;
 import pro.eng.yui.app.viadiscord.discord.SourceNotes;
 import pro.eng.yui.app.viadiscord.discord.ThreadReplySender;
@@ -312,7 +313,13 @@ public final class AiConversation implements java.util.function.Consumer<Message
                     batch.stream().map(MessageReceivedEvent::getMessage).toList()
                 );
                 Object userContent = AttachmentInput.content(
-                    DiscordReplyContext.input(message, history, key, content),
+                    SpeakerIdentity.input(
+                        event.getGuild().getId(),
+                        event.getGuild().getMemberById(user),
+                        user,
+                        settings,
+                        DiscordReplyContext.input(message, history, key, content)
+                    ),
                     received.attachments()
                 );
                 input.add(ChatTimestamps.turn("user", userContent, message.getTimeCreated()));
@@ -336,6 +343,7 @@ public final class AiConversation implements java.util.function.Consumer<Message
                     )
                 );
                 String prompt = instructions +
+                    SpeakerIdentity.INSTRUCTIONS +
                     ServerModelContext.load(event.getGuild()) +
                     "\n" +
                     context.instructions() +

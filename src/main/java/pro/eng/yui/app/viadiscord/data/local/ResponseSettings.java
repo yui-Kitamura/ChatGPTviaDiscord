@@ -34,9 +34,30 @@ public final class ResponseSettings {
                 if (key.startsWith("mode.")) {
                     ResponseMode.parse(data.getProperty(key));
                 }
+                if (key.startsWith("speaker.")) {
+                    validateSpeakerRole(data.getProperty(key), key.substring("speaker.".length()));
+                }
             }
             // Fail startup on malformed character state; never silently discard it.
             characters();
+        }
+    }
+
+    public synchronized String speakerName(String roleId) {
+        return data.getProperty("speaker." + roleId, "");
+    }
+
+    public synchronized void setSpeakerRole(String name, String roleId) throws IOException {
+        validateSpeakerRole(name, roleId);
+        var updated = copy();
+        updated.setProperty("speaker." + roleId, name);
+        save(updated);
+    }
+
+    private static void validateSpeakerRole(String name, String roleId) {
+        if (roleId.matches("[0-9]{17,20}") == false || name.isBlank() || name.length() > 100 ||
+            name.codePoints().anyMatch(Character::isISOControl)) {
+            throw new IllegalArgumentException("Invalid speaker name or role ID.");
         }
     }
 

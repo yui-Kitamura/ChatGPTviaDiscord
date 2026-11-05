@@ -38,6 +38,13 @@ def command_definition():
                 'required': False, 'min_length': 1, 'max_length': 100,
             }],
         }, {
+            'type': 1, 'name': 'role', 'description': '発言者の識別名と識別用ロールを登録する',
+            'options': [
+                {'type': 3, 'name': 'name', 'description': '識別名（同じ名前は共通個体）',
+                 'required': True, 'min_length': 1, 'max_length': 100},
+                {'type': 8, 'name': 'role', 'description': '識別用ロール', 'required': True},
+            ],
+        }, {
             'type': 1, 'name': 'accept', 'description': 'AI利用を許可するロールを追加。省略時は現在使える人を表示',
             'options': [{'type': 8, 'name': 'role', 'description': '許可するロール', 'required': False}],
         }, {
