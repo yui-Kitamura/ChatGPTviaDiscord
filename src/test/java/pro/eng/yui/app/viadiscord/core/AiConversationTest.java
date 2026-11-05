@@ -36,6 +36,7 @@ import pro.eng.yui.app.viadiscord.discord.GvdListener;
 import pro.eng.yui.app.viadiscord.discord.GvdListenerTest;
 import pro.eng.yui.app.viadiscord.discord.MessageInputTest;
 import pro.eng.yui.app.viadiscord.discord.ServerModelContextTest;
+import pro.eng.yui.app.viadiscord.discord.SpeakerAboutContextTest;
 import pro.eng.yui.app.viadiscord.discord.VisitorAccessTest;
 import pro.eng.yui.app.viadiscord.domain.model.CharacterReplyTest;
 import pro.eng.yui.app.viadiscord.domain.model.CharacterSpec;
@@ -87,7 +88,10 @@ class AiConversationTest {
         try (var accounts = new ChatGptAccounts(directory.resolve("auth"));
             var session = new ChatGptSession(accounts, transport, 0)) {
             account(accounts);
-            var h = event(USER, true, "new", "これについて");
+            String mentioned = "323456789012345678", guestRole = "423456789012345678";
+            var h = event(USER, true, "new", "これについて <@" + mentioned + ">");
+            var guest = AiAccessTest.member(false, guestRole);
+            when(h.guild.getMemberById(mentioned)).thenReturn(guest);
             when(h.message.getType()).thenReturn(net.dv8tion.jda.api.entities.MessageType.INLINE_REPLY);
             when(h.message.getChannelId()).thenReturn(ChannelControlsTest.CHANNEL);
             var reference = mock(net.dv8tion.jda.api.entities.MessageReference.class);
@@ -107,7 +111,8 @@ class AiConversationTest {
             ).when(h.reply).queue(any(), any());
             var history = new ChatHistory(directory.resolve("history"));
             var speakerSettings = new ResponseSettings(directory.resolve("response.properties"));
-            speakerSettings.setSpeakerRole("owner", ROLE);
+            speakerSettings.setSpeakerRole("owner", ROLE, "523456789012345678");
+            SpeakerAboutContextTest.document(h.guild, "523456789012345678", "bound owner biography");
             try (var ai = new AiConversation(
                 new AiAccess(directory, ROLE),
                 h.controls,
@@ -124,7 +129,7 @@ class AiConversationTest {
                     .respond(
                         anyString(),
                         anyString(),
-                        anyString(),
+                        contains("bound owner biography"),
                         argThat(
                             turns -> {
                                 String content = turns.stream()
@@ -137,7 +142,9 @@ class AiConversationTest {
                                         .toString();
                                 return content.contains("[発言者情報]") &&
                                     content.contains("\"identity\":\"" + ChannelControlsTest.GUILD + ":name:owner\"") &&
-                                    content.contains("これについて\n") &&
+                                    content.contains("これについて <@" + mentioned + ">\n") &&
+                                    content.contains("[ユーザーメンション情報]") &&
+                                    content.contains(":role:" + guestRole) &&
                                     content.contains("\"message_id\":\"old\"") &&
                                     content.contains("unavailable");
                             }
@@ -149,6 +156,8 @@ class AiConversationTest {
                 UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
             assertEquals("answer", new ChatHistory(directory.resolve("history")).replyBody(key, "sent"));
             assertTrue(history.load(key).turns.getFirst().get("content").toString().contains(":name:owner"));
+            assertTrue(history.load(key).turns.getFirst().get("content").toString().contains(":role:" + guestRole));
+            assertFalse(history.load(key).turns.toString().contains("bound owner biography"));
         }
     }
 
@@ -1331,7 +1340,7 @@ class AiConversationTest {
             assertEquals(2, calls.get());
             assertTrue(prompt.get().contains("server background"));
             assertTrue(prompt.get().contains("server guidance"));
-            assertTrue(prompt.get().contains("server user profile"));
+            assertFalse(prompt.get().contains("server user profile"));
             assertTrue(prompt.get().contains("server reference material"));
             assertTrue(prompt.get().contains("Web検索ツールを利用できます"));
             assertFalse(prompt.get().contains("Web閲覧・記憶検索・外部操作ツールはありません"));
@@ -1513,7 +1522,7 @@ class AiConversationTest {
     }
 
     @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.ValueSource(strings = { "agents", "aboutme", "lib" })
+    @org.junit.jupiter.params.provider.ValueSource(strings = { "readme", "agents", "lib" })
     void missingServerDocumentNeverCallsModelOrSavesHistory(String channel) throws Exception {
         var transport = mock(OpenAiTransport.class);
         try (var accounts = new ChatGptAccounts(directory.resolve("auth"));

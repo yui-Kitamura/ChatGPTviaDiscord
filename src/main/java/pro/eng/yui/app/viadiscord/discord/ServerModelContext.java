@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import net.dv8tion.jda.api.entities.Guild;
 import net.dv8tion.jda.api.entities.Message;
+import net.dv8tion.jda.api.entities.channel.concrete.TextChannel;
 import pro.eng.yui.app.viadiscord.support.FailureDiagnostics;
 
 /**
@@ -38,10 +39,10 @@ public final class ServerModelContext {
 
     public static String load(Guild guild) throws Unavailable {
         var result = new StringBuilder(
-            "\nサーバー管理文書。#readme は背景、#agents は会話の行動指針、#aboutme は利用者についての前提情報、#lib は参照資料として扱う。" +
+            "\nサーバー管理文書。#readme は背景、#agents は会話の行動指針、#lib は参照資料として扱う。" +
                 "同梱文書と異なる内容はサーバー管理文書を優先する。応答形式や利用可能なツールの制約は維持する。\n"
         );
-        for (String name : new String[] { "readme", "agents", "aboutme", "lib" }) {
+        for (String name : new String[] { "readme", "agents", "lib" }) {
             try {
                 var channels = guild.getTextChannelsByName(name, false);
                 if (channels.size() != 1) {
@@ -49,36 +50,9 @@ public final class ServerModelContext {
                 }
 
                 var channel = channels.getFirst();
-                var messages = new ArrayList<Message>();
-                var page = channel.getHistory().retrievePast(100).complete();
-                while (true) {
-                    messages.addAll(page);
-                    if (messages.size() > 500) {
-                        throw new Unavailable(name, FailureDiagnostics.Reason.MESSAGE_LIMIT, null);
-                    }
-
-                    if (page.size() < 100) {
-                        break;
-                    }
-                    page = channel.getHistoryBefore(page.getLast().getId(), 100).complete().getRetrievedHistory();
-                }
-                Collections.reverse(messages);
-                var document = new StringBuilder();
-                for (var message : messages) {
-                    if (!message.getType().isSystem() && !message.getContentRaw().isBlank()) {
-                        document.append(message.getContentRaw()).append('\n');
-                    }
-                    if (document.length() > 32_000) {
-                        throw new Unavailable(name, FailureDiagnostics.Reason.CHARACTER_LIMIT, null);
-                    }
-                }
-                if (document.isEmpty()) {
-                    throw new Unavailable(name, FailureDiagnostics.Reason.EMPTY_DOCUMENT, null);
-                }
-
                 result.append("\n--- #").append(name).append(" (channel_id=").append(channel.getId()).append(
                     ") ---\n"
-                ).append(document).append("--- 文書終わり ---\n");
+                ).append(document(channel, name)).append("--- 文書終わり ---\n");
             } catch (Unavailable e) {
                 throw e;
             } catch (RuntimeException e) {
@@ -87,5 +61,40 @@ public final class ServerModelContext {
             }
         }
         return result.toString();
+    }
+
+    static String document(TextChannel channel, String label) throws Unavailable {
+        try {
+            var messages = new ArrayList<Message>();
+            var page = channel.getHistory().retrievePast(100).complete();
+            while (true) {
+                messages.addAll(page);
+                if (messages.size() > 500) {
+                    throw new Unavailable(label, FailureDiagnostics.Reason.MESSAGE_LIMIT, null);
+                }
+                if (page.size() < 100) {
+                    break;
+                }
+                page = channel.getHistoryBefore(page.getLast().getId(), 100).complete().getRetrievedHistory();
+            }
+            Collections.reverse(messages);
+            var document = new StringBuilder();
+            for (var message : messages) {
+                if (!message.getType().isSystem() && !message.getContentRaw().isBlank()) {
+                    document.append(message.getContentRaw()).append('\n');
+                }
+                if (document.length() > 32_000) {
+                    throw new Unavailable(label, FailureDiagnostics.Reason.CHARACTER_LIMIT, null);
+                }
+            }
+            if (document.isEmpty()) {
+                throw new Unavailable(label, FailureDiagnostics.Reason.EMPTY_DOCUMENT, null);
+            }
+            return document.toString();
+        } catch (Unavailable e) {
+            throw e;
+        } catch (RuntimeException e) {
+            throw new Unavailable(label, FailureDiagnostics.Reason.FETCH_FAILED, e);
+        }
     }
 }

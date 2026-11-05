@@ -36,6 +36,25 @@ class ResponseSettingsTest {
     }
 
     @Test
+    void aboutBindingIsAtomicSurvivesRestartAndIsPreservedWhenOmitted() throws Exception {
+        Path file = directory.resolve("speakers.properties");
+        var settings = new ResponseSettings(file);
+        String role = "123456789012345678", about = "223456789012345678";
+        settings.setSpeakerRole("owner", role, about);
+        var restarted = new ResponseSettings(file);
+        assertEquals("owner", restarted.speakerName(role));
+        assertEquals(about, restarted.speakerAbout(role));
+        restarted.setSpeakerRole("renamed", role);
+        assertEquals(about, new ResponseSettings(file).speakerAbout(role));
+        assertThrows(IllegalArgumentException.class, () -> settings.setSpeakerRole("bad", role, "invalid"));
+        Files.delete(file);
+        Files.createDirectory(file);
+        assertThrows(IOException.class, () -> settings.setSpeakerRole("bad", role, "323456789012345678"));
+        assertEquals("owner", settings.speakerName(role));
+        assertEquals(about, settings.speakerAbout(role));
+    }
+
+    @Test
     void settingsAreIndependentPerChannelAndSurviveRestart() throws Exception {
         Path file = directory.resolve("state.properties");
         var settings = new ResponseSettings(file);

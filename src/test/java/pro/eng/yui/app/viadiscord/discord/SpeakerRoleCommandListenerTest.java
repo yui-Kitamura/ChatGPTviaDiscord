@@ -31,6 +31,7 @@ class SpeakerRoleCommandListenerTest {
         when(event.getOption("role").getAsRole().getGuild().getId()).thenReturn(GUILD);
         when(event.getOption("role").getAsRole().getId()).thenReturn(ROLE);
         when(event.getOption("name").getAsString()).thenReturn("owner");
+        when(event.getOption("about")).thenReturn(null);
         return event;
     }
 
@@ -56,6 +57,36 @@ class SpeakerRoleCommandListenerTest {
         listener.onSlashCommandInteraction(event);
         assertEquals("owner", settings.speakerName(ROLE));
         verify(hook).editOriginal(contains("変更していません"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void storesAboutOptionAndRejectsOtherGuildOrNonTextChannels() throws Exception {
+        var settings = new ResponseSettings(directory.resolve("state.properties"));
+        var listener = new SpeakerRoleCommandListener(GUILD, settings);
+        var event = event();
+        var option = mock(net.dv8tion.jda.api.interactions.commands.OptionMapping.class, RETURNS_DEEP_STUBS);
+        when(event.getOption("about")).thenReturn(option);
+        when(option.getAsChannel().getGuild().getId()).thenReturn(GUILD);
+        when(option.getAsChannel().getType()).thenReturn(net.dv8tion.jda.api.entities.channel.ChannelType.TEXT);
+        when(option.getAsChannel().getId()).thenReturn("423456789012345678");
+        var defer = event.deferReply(true);
+        var hook = mock(InteractionHook.class, RETURNS_DEEP_STUBS);
+        doAnswer(i -> {
+            i.<Consumer<InteractionHook>>getArgument(0).accept(hook);
+            return null;
+        }).when(defer).queue(any(), any());
+        listener.onSlashCommandInteraction(event);
+        assertEquals("423456789012345678", settings.speakerAbout(ROLE));
+        verify(hook).editOriginal(contains("人物紹介"));
+        clearInvocations(event);
+        when(option.getAsChannel().getGuild().getId()).thenReturn("other");
+        listener.onSlashCommandInteraction(event);
+        verify(event, never()).deferReply(anyBoolean());
+        when(option.getAsChannel().getGuild().getId()).thenReturn(GUILD);
+        when(option.getAsChannel().getType()).thenReturn(net.dv8tion.jda.api.entities.channel.ChannelType.CATEGORY);
+        listener.onSlashCommandInteraction(event);
+        verify(event, never()).deferReply(anyBoolean());
     }
 
     @Test
