@@ -18,6 +18,24 @@ class ResponseSettingsTest {
     Path directory;
 
     @Test
+    void speakerRolesSurviveRestartAndFailedSaveKeepsPreviousState() throws Exception {
+        Path file = directory.resolve("speakers.properties");
+        var settings = new ResponseSettings(file);
+        String role = "123456789012345678";
+        assertEquals("", settings.speakerName(role));
+        settings.setSpeakerRole("owner", role);
+        assertEquals("owner", new ResponseSettings(file).speakerName(role));
+        settings.setSpeakerRole("別名", role);
+        assertEquals("別名", new ResponseSettings(file).speakerName(role));
+        assertThrows(IllegalArgumentException.class, () -> settings.setSpeakerRole("\n", role));
+        assertThrows(IllegalArgumentException.class, () -> settings.setSpeakerRole("owner", "bad"));
+        Files.delete(file);
+        Files.createDirectory(file);
+        assertThrows(IOException.class, () -> settings.setSpeakerRole("owner", role));
+        assertEquals("別名", settings.speakerName(role));
+    }
+
+    @Test
     void settingsAreIndependentPerChannelAndSurviveRestart() throws Exception {
         Path file = directory.resolve("state.properties");
         var settings = new ResponseSettings(file);
@@ -45,6 +63,8 @@ class ResponseSettingsTest {
     void malformedStateIsNotSilentlyReset() throws Exception {
         Path file = directory.resolve("state.properties");
         Files.writeString(file, "mode.channel=unknown\n");
+        assertThrows(IllegalArgumentException.class, () -> new ResponseSettings(file));
+        Files.writeString(file, "speaker.invalid=owner\n");
         assertThrows(IllegalArgumentException.class, () -> new ResponseSettings(file));
     }
 
