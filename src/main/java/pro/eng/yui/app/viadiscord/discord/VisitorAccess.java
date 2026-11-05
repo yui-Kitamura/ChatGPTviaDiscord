@@ -70,6 +70,10 @@ final public class VisitorAccess {
         save(next);
     }
 
+    public synchronized boolean isChannel(String channelId) {
+        return channelId.equals(data.getProperty("channel"));
+    }
+
     public synchronized boolean permits(MessageReceivedEvent event, Member member, ResponseSettings settings) {
         if (member == null ||
             member.getUser().isBot() ||

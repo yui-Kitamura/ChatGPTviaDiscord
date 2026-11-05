@@ -80,7 +80,7 @@ public final class SpeakerIdentity {
         );
     }
 
-    private static ObjectNode identity(String guildId, Member member, String accountId, ResponseSettings settings) {
+    static ObjectNode identity(String guildId, Member member, String accountId, ResponseSettings settings) {
         var data = JSON.createObjectNode();
         var roles = member == null ? java.util.List.<net.dv8tion.jda.api.entities.Role>of() : member.getRoles();
         var registered = roles.stream().filter(role -> !settings.speakerName(role.getId()).isEmpty()).toList();
