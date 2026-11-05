@@ -2,6 +2,7 @@ package pro.eng.yui.app.viadiscord.discord;
 
 import java.io.IOException;
 import net.dv8tion.jda.api.Permission;
+import net.dv8tion.jda.api.entities.channel.ChannelType;
 import net.dv8tion.jda.api.events.interaction.command.SlashCommandInteractionEvent;
 import net.dv8tion.jda.api.hooks.ListenerAdapter;
 import pro.eng.yui.app.viadiscord.data.local.ResponseSettings;
@@ -46,6 +47,12 @@ public final class SpeakerRoleCommandListener extends ListenerAdapter {
             event.reply("対象サーバーの@everyone以外のロールを指定してください。").setEphemeral(true).queue();
             return;
         }
+        var aboutOption = event.getOption("about");
+        var about = aboutOption == null ? null : aboutOption.getAsChannel();
+        if (about != null && (!guildId.equals(about.getGuild().getId()) || about.getType() != ChannelType.TEXT)) {
+            event.reply("aboutには対象サーバーのテキストチャンネルを指定してください。").setEphemeral(true).queue();
+            return;
+        }
         event.deferReply(true).queue(
             hook -> {
                 var member = event.getGuild().getMemberById(event.getUser().getId());
@@ -54,11 +61,12 @@ public final class SpeakerRoleCommandListener extends ListenerAdapter {
                     return;
                 }
                 try {
-                    settings.setSpeakerRole(name, role.getId());
+                    settings.setSpeakerRole(name, role.getId(), about == null ? null : about.getId());
                     FailureDiagnostics.edit(
                         hook,
                         "識別名「" + name + "」にロール " + role.getAsMention() +
-                            " を登録しました。同じ識別名のアカウントを共通個体として識別します。",
+                            " を登録しました。同じ識別名のアカウントを共通個体として識別します。" +
+                            (about == null ? "" : "\n人物紹介: " + about.getAsMention()),
                         "SPEAKER_ROLE_REPLY"
                     );
                 } catch (IOException e) {

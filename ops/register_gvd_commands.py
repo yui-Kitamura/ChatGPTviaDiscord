@@ -43,6 +43,8 @@ def command_definition():
                 {'type': 3, 'name': 'name', 'description': '識別名（同じ名前は共通個体）',
                  'required': True, 'min_length': 1, 'max_length': 100},
                 {'type': 8, 'name': 'role', 'description': '識別用ロール', 'required': True},
+                {'type': 7, 'name': 'about', 'description': 'このロールのユーザーについての人物紹介チャンネル',
+                 'required': False, 'channel_types': [0]},
             ],
         }, {
             'type': 1, 'name': 'accept', 'description': 'AI利用を許可するロールを追加。省略時は現在使える人を表示',

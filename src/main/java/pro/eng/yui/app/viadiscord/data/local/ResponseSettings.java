@@ -37,6 +37,10 @@ public final class ResponseSettings {
                 if (key.startsWith("speaker.")) {
                     validateSpeakerRole(data.getProperty(key), key.substring("speaker.".length()));
                 }
+                if (key.startsWith("speaker-about.")) {
+                    validateSpeakerRole("about", key.substring("speaker-about.".length()));
+                    validateAboutChannel(data.getProperty(key));
+                }
             }
             // Fail startup on malformed character state; never silently discard it.
             characters();
@@ -48,10 +52,28 @@ public final class ResponseSettings {
     }
 
     public synchronized void setSpeakerRole(String name, String roleId) throws IOException {
+        setSpeakerRole(name, roleId, null);
+    }
+
+    public synchronized String speakerAbout(String roleId) {
+        return data.getProperty("speaker-about." + roleId, "");
+    }
+
+    public synchronized void setSpeakerRole(String name, String roleId, String aboutChannelId) throws IOException {
         validateSpeakerRole(name, roleId);
         var updated = copy();
         updated.setProperty("speaker." + roleId, name);
+        if (aboutChannelId != null) {
+            validateAboutChannel(aboutChannelId);
+            updated.setProperty("speaker-about." + roleId, aboutChannelId);
+        }
         save(updated);
+    }
+
+    private static void validateAboutChannel(String channelId) {
+        if (channelId.matches("[0-9]{17,20}") == false) {
+            throw new IllegalArgumentException("Invalid about channel ID.");
+        }
     }
 
     private static void validateSpeakerRole(String name, String roleId) {
