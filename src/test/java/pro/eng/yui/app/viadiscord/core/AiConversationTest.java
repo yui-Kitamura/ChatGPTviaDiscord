@@ -36,6 +36,7 @@ import pro.eng.yui.app.viadiscord.discord.GvdListener;
 import pro.eng.yui.app.viadiscord.discord.GvdListenerTest;
 import pro.eng.yui.app.viadiscord.discord.MessageInputTest;
 import pro.eng.yui.app.viadiscord.discord.ServerModelContextTest;
+import pro.eng.yui.app.viadiscord.discord.SpeakerAboutContextTest;
 import pro.eng.yui.app.viadiscord.discord.VisitorAccessTest;
 import pro.eng.yui.app.viadiscord.domain.model.CharacterReplyTest;
 import pro.eng.yui.app.viadiscord.domain.model.CharacterSpec;
@@ -87,7 +88,10 @@ class AiConversationTest {
         try (var accounts = new ChatGptAccounts(directory.resolve("auth"));
             var session = new ChatGptSession(accounts, transport, 0)) {
             account(accounts);
-            var h = event(USER, true, "new", "これについて");
+            String mentioned = "323456789012345678", guestRole = "423456789012345678";
+            var h = event(USER, true, "new", "これについて <@" + mentioned + ">");
+            var guest = AiAccessTest.member(false, guestRole);
+            when(h.guild.getMemberById(mentioned)).thenReturn(guest);
             when(h.message.getType()).thenReturn(net.dv8tion.jda.api.entities.MessageType.INLINE_REPLY);
             when(h.message.getChannelId()).thenReturn(ChannelControlsTest.CHANNEL);
             var reference = mock(net.dv8tion.jda.api.entities.MessageReference.class);
@@ -106,12 +110,15 @@ class AiConversationTest {
                 }
             ).when(h.reply).queue(any(), any());
             var history = new ChatHistory(directory.resolve("history"));
+            var speakerSettings = new ResponseSettings(directory.resolve("response.properties"));
+            speakerSettings.setSpeakerRole("owner", ROLE, "523456789012345678");
+            SpeakerAboutContextTest.document(h.guild, "523456789012345678", "bound owner biography");
             try (var ai = new AiConversation(
                 new AiAccess(directory, ROLE),
                 h.controls,
                 session,
                 transport,
-                new ResponseSettings(directory.resolve("response.properties")),
+                speakerSettings,
                 history,
                 "guide"
             )) {
@@ -122,7 +129,7 @@ class AiConversationTest {
                     .respond(
                         anyString(),
                         anyString(),
-                        anyString(),
+                        contains("bound owner biography"),
                         argThat(
                             turns -> {
                                 String content = turns.stream()
@@ -133,7 +140,11 @@ class AiConversationTest {
                                             "content"
                                         )
                                         .toString();
-                                return content.startsWith("これについて\n") &&
+                                return content.contains("[発言者情報]") &&
+                                    content.contains("\"identity\":\"" + ChannelControlsTest.GUILD + ":name:owner\"") &&
+                                    content.contains("これについて <@" + mentioned + ">\n") &&
+                                    content.contains("[ユーザーメンション情報]") &&
+                                    content.contains(":role:" + guestRole) &&
                                     content.contains("\"message_id\":\"old\"") &&
                                     content.contains("unavailable");
                             }
@@ -144,6 +155,9 @@ class AiConversationTest {
                 "-" +
                 UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
             assertEquals("answer", new ChatHistory(directory.resolve("history")).replyBody(key, "sent"));
+            assertTrue(history.load(key).turns.getFirst().get("content").toString().contains(":name:owner"));
+            assertTrue(history.load(key).turns.getFirst().get("content").toString().contains(":role:" + guestRole));
+            assertFalse(history.load(key).turns.toString().contains("bound owner biography"));
         }
     }
 
@@ -330,7 +344,12 @@ class AiConversationTest {
                 anyString(),
                 anyString(),
                 anyString(),
-                anyList(),
+                argThat(turns -> {
+                    String text = turns.stream().filter(turn -> "user".equals(turn.get("role")))
+                            .findFirst().orElseThrow().get("content").toString();
+                    return text.contains("[発言者情報]") && text.contains("\"accountId\":\"" + USER + "\"") &&
+                        !text.contains(":name:owner");
+                }),
                 any(OpenAiTransport.Progress.class)
             );
             verify(second.message).reply(contains("60秒"));
@@ -368,7 +387,7 @@ class AiConversationTest {
             ) {
                 assertEquals(1, turns.size());
                 assertEquals("user", turns.getFirst().get("role"));
-                assertEquals("question\n[転送メッセージ・引用資料]\n資料", turns.getFirst().get("content"));
+                assertTrue(turns.getFirst().get("content").toString().endsWith("question\n[転送メッセージ・引用資料]\n資料"));
                 assertTrue(turns.getFirst().get("timestamp_jst").toString().endsWith("+09:00 JST"));
                 if (calls.incrementAndGet() == 1) {
                     return "invalid";
@@ -818,9 +837,11 @@ class AiConversationTest {
                     ai.accept((forwardFirst ? note : forward).messageEvent);
                     assertTrue(done.await(5, TimeUnit.SECONDS));
                     assertEquals(
-                        List.of(ChatTimestamps.turn("user", "説明して\n[転送メッセージ・引用資料]\n資料", time)),
+                        List.of(ChatTimestamps.turn("user", request.get().getFirst().get("content"), time)),
                         request.get()
                     );
+                    assertTrue(request.get().getFirst().get("content").toString()
+                            .endsWith("[発言本文]\n説明して\n[転送メッセージ・引用資料]\n資料"));
                     verify(forward.message, never()).reply(anyString());
                     String key = ChannelControlsTest.CHANNEL +
                         "-" +
@@ -1319,7 +1340,7 @@ class AiConversationTest {
             assertEquals(2, calls.get());
             assertTrue(prompt.get().contains("server background"));
             assertTrue(prompt.get().contains("server guidance"));
-            assertTrue(prompt.get().contains("server user profile"));
+            assertFalse(prompt.get().contains("server user profile"));
             assertTrue(prompt.get().contains("server reference material"));
             assertTrue(prompt.get().contains("Web検索ツールを利用できます"));
             assertFalse(prompt.get().contains("Web閲覧・記憶検索・外部操作ツールはありません"));
@@ -1464,7 +1485,8 @@ class AiConversationTest {
             assertEquals(2, calls.get());
             assertEquals(
                 List.of("first", "answer", "second"),
-                input.get().stream().map(t -> t.get("content")).toList()
+                input.get().stream().map(t -> t.get("content").toString().split("\\[発言本文\\]\\n", 2))
+                        .map(parts -> parts[parts.length - 1]).toList()
             );
             assertEquals("2026-10-31 03:02:03 +09:00 JST", input.get().getFirst().get("timestamp_jst"));
             assertTrue(input.get().get(1).get("timestamp_jst").toString().endsWith("+09:00 JST"));
@@ -1500,7 +1522,7 @@ class AiConversationTest {
     }
 
     @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.ValueSource(strings = { "agents", "aboutme", "lib" })
+    @org.junit.jupiter.params.provider.ValueSource(strings = { "readme", "agents", "lib" })
     void missingServerDocumentNeverCallsModelOrSavesHistory(String channel) throws Exception {
         var transport = mock(OpenAiTransport.class);
         try (var accounts = new ChatGptAccounts(directory.resolve("auth"));
@@ -1614,7 +1636,7 @@ class AiConversationTest {
             if (withAttachment) {
                 assertTrue(persisted.toString().contains("data:image/png;base64,AQID"));
             } else {
-                assertEquals(content, persisted);
+                assertTrue(persisted.toString().endsWith("[発言本文]\n" + content));
             }
             verify(h.message).reply("readback answer");
             assertEquals(1, completed.get());

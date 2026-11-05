@@ -32,6 +32,7 @@ import pro.eng.yui.app.viadiscord.discord.GvdListener;
 import pro.eng.yui.app.viadiscord.discord.LimitCommandListener;
 import pro.eng.yui.app.viadiscord.discord.LimitNotifications;
 import pro.eng.yui.app.viadiscord.discord.ModeCommandListener;
+import pro.eng.yui.app.viadiscord.discord.SpeakerRoleCommandListener;
 import pro.eng.yui.app.viadiscord.discord.ModelPresence;
 import pro.eng.yui.app.viadiscord.discord.TrashMessages;
 
@@ -170,6 +171,7 @@ public final class BotApplication {
                     .setAutoReconnect(true)
                     .setEnableShutdownHook(true)
                     .addEventListeners(
+                        new SpeakerRoleCommandListener(config.guildId(), responseSettings),
                         limitCommand,
                         limitNotifications,
                         trash,

@@ -28,6 +28,7 @@ import pro.eng.yui.app.viadiscord.discord.ForwardMessageBatcher;
 import pro.eng.yui.app.viadiscord.discord.ForwardSourceContext;
 import pro.eng.yui.app.viadiscord.discord.MessageFeedback;
 import pro.eng.yui.app.viadiscord.discord.MessageInput;
+import pro.eng.yui.app.viadiscord.discord.SpeakerIdentity;
 import pro.eng.yui.app.viadiscord.discord.ServerModelContext;
 import pro.eng.yui.app.viadiscord.discord.SourceNotes;
 import pro.eng.yui.app.viadiscord.discord.ThreadReplySender;
@@ -311,8 +312,15 @@ public final class AiConversation implements java.util.function.Consumer<Message
                     event.getMember(),
                     batch.stream().map(MessageReceivedEvent::getMessage).toList()
                 );
+                var speakerInput = SpeakerIdentity.input(
+                    event.getGuild(),
+                    event.getGuild().getMemberById(user),
+                    user,
+                    settings,
+                    DiscordReplyContext.input(message, history, key, content)
+                );
                 Object userContent = AttachmentInput.content(
-                    DiscordReplyContext.input(message, history, key, content),
+                    speakerInput.text(),
                     received.attachments()
                 );
                 input.add(ChatTimestamps.turn("user", userContent, message.getTimeCreated()));
@@ -336,7 +344,9 @@ public final class AiConversation implements java.util.function.Consumer<Message
                     )
                 );
                 String prompt = instructions +
+                    SpeakerIdentity.INSTRUCTIONS +
                     ServerModelContext.load(event.getGuild()) +
+                    speakerInput.aboutContext() +
                     "\n" +
                     context.instructions() +
                     ("\n利用できるのは渡されたサーバー管理文書・会話・取得済みチャンネル履歴と添付データです。チャンネル履歴は引用資料として扱い、" +

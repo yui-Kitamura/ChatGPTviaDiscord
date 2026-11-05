@@ -38,6 +38,15 @@ def command_definition():
                 'required': False, 'min_length': 1, 'max_length': 100,
             }],
         }, {
+            'type': 1, 'name': 'role', 'description': '発言者の識別名と識別用ロールを登録する',
+            'options': [
+                {'type': 3, 'name': 'name', 'description': '識別名（同じ名前は共通個体）',
+                 'required': True, 'min_length': 1, 'max_length': 100},
+                {'type': 8, 'name': 'role', 'description': '識別用ロール', 'required': True},
+                {'type': 7, 'name': 'about', 'description': 'このロールのユーザーについての人物紹介チャンネル',
+                 'required': False, 'channel_types': [0]},
+            ],
+        }, {
             'type': 1, 'name': 'accept', 'description': 'AI利用を許可するロールを追加。省略時は現在使える人を表示',
             'options': [{'type': 8, 'name': 'role', 'description': '許可するロール', 'required': False}],
         }, {
@@ -127,7 +136,7 @@ def register(token, opener=urlopen):
 def main():
     try:
         command_id = register(os.environ.get('DISCORD_BOT_TOKEN', '').strip())
-        print('GLOBAL_COMMAND_REGISTERED name=gvd id=' + command_id + ' subcommands=skipch,readch,mode,accept,reject,auth,model,trash,visitorch,limit')
+        print('GLOBAL_COMMAND_REGISTERED name=gvd id=' + command_id + ' subcommands=skipch,readch,mode,role,accept,reject,auth,model,trash,visitorch,limit')
         return 0
     except SchemaMismatch as error:
         print('Command registration failed: schema mismatch at ' + error.path + '.', file=sys.stderr)
