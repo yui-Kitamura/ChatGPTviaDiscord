@@ -31,7 +31,7 @@ class CommandRegistrationTest(unittest.TestCase):
         payload = json.loads(requests[1].data)
         self.assertEqual([0], payload['contexts'])
         self.assertEqual([0], payload['integration_types'])
-        self.assertEqual(['skipch', 'readch', 'mode', 'accept', 'reject', 'auth', 'model', 'trash', 'visitorch', 'limit'], [item['name'] for item in payload['options']])
+        self.assertEqual(['skipch', 'readch', 'mode', 'role', 'accept', 'reject', 'auth', 'model', 'trash', 'visitorch', 'limit'], [item['name'] for item in payload['options']])
         limit = next(item for item in payload['options'] if item['name'] == 'limit')
         self.assertEqual(1, limit['type'])
         self.assertFalse(limit.get('options'))
@@ -50,6 +50,10 @@ class CommandRegistrationTest(unittest.TestCase):
         self.assertEqual(3, title['type'])
         self.assertFalse(title['required'])
         self.assertEqual(100, title['max_length'])
+        speaker = next(item for item in payload['options'] if item['name'] == 'role')
+        self.assertEqual([('name', 3, True), ('role', 8, True)],
+                         [(option['name'], option['type'], option['required']) for option in speaker['options']])
+        self.assertEqual(100, speaker['options'][0]['max_length'])
 
     def test_visitor_channel_has_optional_channel_and_delete_flag(self):
         visitor = next(item for item in module.command_definition()['options'] if item['name'] == 'visitorch')

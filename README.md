@@ -131,13 +131,14 @@ GitHub Secrets は保存後の値を読み出せない。オンライン確認�
 
 手動実行で register_commands_only を true にすると、指定 ref の /gvd 定義だけを登録する。通常の main 限定デプロイとは別の経路であり、current の切替・unit の更新・Bot の再起動は行わない。既に準備済みの VPS と Python 3 が必要。
 
-登録内容は次の 8 つ。グローバル登録し、使用コンテキストはギルドに限定する。
+グローバル登録し、使用コンテキストはギルドに限定する。
 
 - /gvd skipch ch:チャンネル
 - /gvd readch ch:チャンネル
 - /gvd visitorch ch:チャンネル
 - /gvd visitorch delete:true
 - /gvd mode mode:thread または qa、title:スレタイ（任意、1行・100文字以内）
+- /gvd role name:識別名 role:@識別用ロール
 - /gvd accept role:@ロール（省略時は今使える人を一覧）
 - /gvd reject role:@ロール
 - /gvd auth action:login/status/use/logout account:保存名（省略時login/default）

@@ -134,7 +134,7 @@ def register(token, opener=urlopen):
 def main():
     try:
         command_id = register(os.environ.get('DISCORD_BOT_TOKEN', '').strip())
-        print('GLOBAL_COMMAND_REGISTERED name=gvd id=' + command_id + ' subcommands=skipch,readch,mode,accept,reject,auth,model,trash,visitorch,limit')
+        print('GLOBAL_COMMAND_REGISTERED name=gvd id=' + command_id + ' subcommands=skipch,readch,mode,role,accept,reject,auth,model,trash,visitorch,limit')
         return 0
     except SchemaMismatch as error:
         print('Command registration failed: schema mismatch at ' + error.path + '.', file=sys.stderr)
