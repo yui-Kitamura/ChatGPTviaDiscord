@@ -142,6 +142,7 @@ class AiConversationTest {
             account(accounts);
             String mentioned = "323456789012345678", guestRole = "423456789012345678";
             var h = event(USER, true, "new", "これについて <@" + mentioned + ">");
+            when(h.messageEvent.getChannel().getName()).thenReturn("相談");
             var guest = AiAccessTest.member(false, guestRole);
             when(h.guild.getMemberById(mentioned)).thenReturn(guest);
             when(h.message.getType()).thenReturn(net.dv8tion.jda.api.entities.MessageType.INLINE_REPLY);
@@ -192,7 +193,8 @@ class AiConversationTest {
                                             "content"
                                         )
                                         .toString();
-                                return content.contains("[発言者情報]") &&
+                                return content.contains("--- #相談 (channel_id="+ ChannelControlsTest.CHANNEL +") ---") &&
+                                    content.contains("[発言者情報]") &&
                                     content.contains("\"identity\":\"" + ChannelControlsTest.GUILD + ":name:owner\"") &&
                                     content.contains("これについて <@" + mentioned + ">\n") &&
                                     content.contains("[ユーザーメンション情報]") &&

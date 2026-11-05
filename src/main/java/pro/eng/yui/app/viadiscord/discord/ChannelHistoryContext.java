@@ -146,9 +146,7 @@ public final class ChannelHistoryContext {
                     size += record.length();
                 }
                 Collections.reverse(records);
-                result.append("\n--- #").append(channel.getName()).append(" (channel_id=").append(id).append(
-                    ") ---\n"
-                ).append("取得投稿数: ").append(records.size()).append(
+                result.append('\n').append(ChannelLocation.header(channel)).append("取得投稿数: ").append(records.size()).append(
                     truncated ? "。上限による省略あり。全履歴ではありません。\n" : "。取得可能な履歴の先頭まで確認。\n"
                 );
                 if (!messages.isEmpty() && records.isEmpty()) {

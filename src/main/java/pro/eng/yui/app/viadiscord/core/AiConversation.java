@@ -22,6 +22,7 @@ import pro.eng.yui.app.viadiscord.discord.AiAccess;
 import pro.eng.yui.app.viadiscord.discord.AttachmentInput;
 import pro.eng.yui.app.viadiscord.discord.ChannelControls;
 import pro.eng.yui.app.viadiscord.discord.ChannelHistoryContext;
+import pro.eng.yui.app.viadiscord.discord.ChannelLocation;
 import pro.eng.yui.app.viadiscord.discord.CharacterRoles;
 import pro.eng.yui.app.viadiscord.discord.DiscordReplyContext;
 import pro.eng.yui.app.viadiscord.discord.ForwardMessageBatcher;
@@ -354,7 +355,7 @@ public final class AiConversation implements java.util.function.Consumer<Message
                     DiscordReplyContext.input(message, history, key, content)
                 );
                 Object userContent = AttachmentInput.content(
-                    speakerInput.text(),
+                    ChannelLocation.header(event.getChannel()) + speakerInput.text(),
                     received.attachments()
                 );
                 input.add(ChatTimestamps.turn("user", userContent, message.getTimeCreated()));
