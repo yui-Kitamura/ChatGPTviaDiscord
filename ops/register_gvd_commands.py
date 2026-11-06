@@ -67,8 +67,8 @@ def command_definition():
         }, {
             'type': 1, 'name': 'visitorch', 'description': 'GvDvisitorがメンションでAIを呼べるチャンネルを設定・解除する',
             'options': [
-                {'type': 7, 'name': 'ch', 'description': '設定する対象チャンネル（解除時は省略）', 'required': False},
-                {'type': 5, 'name': 'delete', 'description': 'trueでvisitorチャンネルの指定を解除する', 'required': False},
+                {'type': 7, 'name': 'ch', 'description': '追加・解除する対象チャンネル', 'required': True},
+                {'type': 5, 'name': 'delete', 'description': 'trueで指定したチャンネルだけを解除する', 'required': False},
             ],
         }, {
             'type': 1, 'name': 'limit', 'description': 'AIの利用枠・残量と確認先を表示する',

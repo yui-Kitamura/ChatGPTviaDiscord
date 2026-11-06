@@ -56,11 +56,12 @@ class CommandRegistrationTest(unittest.TestCase):
         self.assertEqual(100, speaker['options'][0]['max_length'])
         self.assertEqual([0], speaker['options'][2]['channel_types'])
 
-    def test_visitor_channel_has_optional_channel_and_delete_flag(self):
+    def test_visitor_channel_requires_target_and_has_optional_delete_flag(self):
         visitor = next(item for item in module.command_definition()['options'] if item['name'] == 'visitorch')
         self.assertEqual(['ch', 'delete'], [option['name'] for option in visitor['options']])
         self.assertEqual([7, 5], [option['type'] for option in visitor['options']])
-        self.assertTrue(all(option['required'] is False for option in visitor['options']))
+        self.assertTrue(visitor['options'][0]['required'])
+        self.assertFalse(visitor['options'][1]['required'])
 
     def test_accept_is_optional_and_reject_requires_a_role(self):
         by_name = {item['name']: item for item in module.command_definition()['options']}

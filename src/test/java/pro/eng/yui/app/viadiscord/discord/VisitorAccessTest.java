@@ -55,7 +55,12 @@ public class VisitorAccessTest {
         assertFalse(access.permits(h.messageEvent, member, settings));
         when(h.messageEvent.getChannel().getId()).thenReturn(ChannelControlsTest.CHANNEL);
         access.setChannel(ChannelControlsTest.THREAD);
-        assertFalse(new VisitorAccess(directory).permits(h.messageEvent, member, settings));
+        access = new VisitorAccess(directory);
+        assertTrue(access.permits(h.messageEvent, member, settings));
+        when(h.messageEvent.getChannel().getId()).thenReturn(ChannelControlsTest.THREAD);
+        assertTrue(access.permits(h.messageEvent, member, settings));
+        when(h.messageEvent.getChannel().getId()).thenReturn(OTHER);
+        assertFalse(access.permits(h.messageEvent, member, settings));
     }
 
     @Test
@@ -122,17 +127,25 @@ public class VisitorAccessTest {
         access.setChannel(ChannelControlsTest.CHANNEL);
         assertTrue(access.permits(h.messageEvent, member, settings));
         assertTrue(access.acquire(USER));
-        access.clearChannel();
+        access.setChannel(ChannelControlsTest.THREAD);
+        access.clearChannel(ChannelControlsTest.CHANNEL);
         assertFalse(access.permits(h.messageEvent, member, settings));
         access = new VisitorAccess(directory, at(100_001));
 
         assertFalse(access.permits(h.messageEvent, member, settings));
+        assertTrue(access.isChannel(ChannelControlsTest.THREAD));
         // Idempotent when not configured.
-        access.clearChannel();
+        access.clearChannel(ChannelControlsTest.CHANNEL);
 
         access.setChannel(ChannelControlsTest.CHANNEL);
 
         assertTrue(access.permits(h.messageEvent, member, settings));
+        assertFalse(access.acquire(USER));
+        access.clearChannel(ChannelControlsTest.THREAD);
+        access.clearChannel(ChannelControlsTest.CHANNEL);
+        access = new VisitorAccess(directory, at(100_001));
+        assertFalse(access.isChannel(ChannelControlsTest.CHANNEL));
+        assertFalse(access.isChannel(ChannelControlsTest.THREAD));
         assertFalse(access.acquire(USER));
     }
 
@@ -147,8 +160,46 @@ public class VisitorAccessTest {
         h.mentionBot("<@" + GvdListenerTest.BOT + ">");
         Files.delete(directory.resolve("ai-visitor.properties"));
         Files.createDirectory(directory.resolve("ai-visitor.properties"));
-        assertThrows(java.io.IOException.class, access::clearChannel);
+        assertThrows(java.io.IOException.class, () -> access.clearChannel(ChannelControlsTest.CHANNEL));
         assertTrue(access.permits(h.messageEvent, visitor(), settings));
+    }
+
+    @Test
+    void legacyChannelMigratesWithoutLosingRateStateOrReplacingOtherChannels() throws Exception {
+        var file = directory.resolve("ai-visitor.properties");
+        Files.writeString(file, "channel="+ ChannelControlsTest.CHANNEL +"\nlast."+ USER +"=100000\n");
+        var access = new VisitorAccess(directory, at(100_001));
+        assertTrue(access.isChannel(ChannelControlsTest.CHANNEL));
+        assertFalse(access.acquire(USER));
+        access.setChannel(ChannelControlsTest.THREAD);
+        access.setChannel(ChannelControlsTest.THREAD);
+        access = new VisitorAccess(directory, at(100_001));
+        assertTrue(access.isChannel(ChannelControlsTest.CHANNEL));
+        assertTrue(access.isChannel(ChannelControlsTest.THREAD));
+        assertFalse(Files.readString(file).contains("channel="));
+        assertFalse(access.acquire(USER));
+        access.clearChannel(ChannelControlsTest.THREAD);
+        access.setChannel(ChannelControlsTest.THREAD);
+        assertFalse(access.acquire(USER));
+        access.clearChannel(ChannelControlsTest.CHANNEL);
+        access = new VisitorAccess(directory, at(100_001));
+        assertFalse(access.isChannel(ChannelControlsTest.CHANNEL));
+        assertTrue(access.isChannel(ChannelControlsTest.THREAD));
+    }
+
+    @Test
+    void invalidChannelEntriesFailClosedAndInvalidUpdatesLeaveExistingChannels() throws Exception {
+        var file = directory.resolve("ai-visitor.properties");
+        for(String value : List.of("channel.invalid=true", "channel."+ USER +"=false", "channel=invalid")) {
+            Files.writeString(file, value);
+            assertThrows(java.io.IOException.class, () -> new VisitorAccess(directory));
+        }
+        Files.delete(file);
+        var access = new VisitorAccess(directory);
+        access.setChannel(ChannelControlsTest.CHANNEL);
+        assertThrows(java.io.IOException.class, () -> access.clearChannel("invalid"));
+        assertThrows(java.io.IOException.class, () -> access.setChannel("invalid"));
+        assertTrue(new VisitorAccess(directory).isChannel(ChannelControlsTest.CHANNEL));
     }
 
     @Test

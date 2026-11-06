@@ -51,6 +51,7 @@ class AiConversationTest {
     @TempDir
     Path directory;
     static final String ROLE = "1565364891676713192", USER = "123456789012345678";
+    private static final String OTHER_CHANNEL = "456789012345678901";
 
     @Test
     void visitorChannelRebuildsProviderHistoryWithoutPersistingContextOrReusingOldIdentity() throws Exception {
@@ -78,6 +79,7 @@ class AiConversationTest {
         history.save(key, saved);
         var access = new AiAccess(directory, ROLE);
         access.visitors.setChannel(ChannelControlsTest.CHANNEL);
+        access.visitors.setChannel(OTHER_CHANNEL);
         try(var accounts = new ChatGptAccounts(directory.resolve("auth"));
             var session = new ChatGptSession(accounts, transport, 0)) {
             account(accounts);
@@ -454,6 +456,7 @@ class AiConversationTest {
             var done = new CountDownLatch(1);
             var access = new AiAccess(directory, ROLE);
             access.visitors.setChannel(ChannelControlsTest.CHANNEL);
+            access.visitors.setChannel(OTHER_CHANNEL);
             assertFalse(access.permits(member));
             try (var ai = new AiConversation(
                 access,
