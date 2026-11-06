@@ -70,6 +70,17 @@ class AiCommandsTest {
         );
     }
 
+    private void visitorChannelOption(SlashCommandInteractionEvent event, String channelId) {
+        var channel = mock(net.dv8tion.jda.api.entities.channel.unions.GuildChannelUnion.class);
+        when(channel.getId()).thenReturn(channelId);
+        var guild = event.getGuild();
+        when(channel.getGuild()).thenReturn(guild);
+        when(channel.getType()).thenReturn(net.dv8tion.jda.api.entities.channel.ChannelType.TEXT);
+        var option = mock(OptionMapping.class);
+        when(option.getAsChannel()).thenReturn(channel);
+        when(event.getOption("ch")).thenReturn(option);
+    }
+
     @Test
     void visitorChannelRequiresManagerAndPersistsOnlyValidGuildChannels() throws Exception {
         var access = new AiAccess(directory, "");
@@ -97,12 +108,17 @@ class AiCommandsTest {
             verify(event, never()).deferReply(true);
             when(channel.getType()).thenReturn(net.dv8tion.jda.api.entities.channel.ChannelType.TEXT);
             listener.onSlashCommandInteraction(event);
-            verify(hook).editOriginal(contains("をvisitorチャンネルに設定"));
+            verify(hook).editOriginal(contains("をvisitorチャンネルに追加"));
             assertTrue(
                 java.nio.file.Files.readString(directory.resolve("ai-visitor.properties")).contains(
                     ChannelControlsTest.CHANNEL
                 )
             );
+            when(channel.getId()).thenReturn(ChannelControlsTest.THREAD);
+            listener.onSlashCommandInteraction(event);
+            var reloaded = new AiAccess(directory, "").visitors;
+            assertTrue(reloaded.isChannel(ChannelControlsTest.CHANNEL));
+            assertTrue(reloaded.isChannel(ChannelControlsTest.THREAD));
             java.nio.file.Files.delete(directory.resolve("ai-visitor.properties"));
             java.nio.file.Files.createDirectory(directory.resolve("ai-visitor.properties"));
             listener.onSlashCommandInteraction(event);
@@ -116,9 +132,11 @@ class AiCommandsTest {
     void deletingVisitorChannelRequiresManagerAndRechecksPermission() throws Exception {
         var access = new AiAccess(directory, "");
         access.visitors.setChannel(ChannelControlsTest.CHANNEL);
+        access.visitors.setChannel(ChannelControlsTest.THREAD);
         var hook = hook();
         var member = VisitorAccessTest.visitor();
         var event = event("visitorch", member, hook);
+        visitorChannelOption(event, ChannelControlsTest.CHANNEL);
         var guild = event.getGuild();
         var userId = event.getUser().getId();
         var delete = mock(OptionMapping.class);
@@ -128,23 +146,19 @@ class AiCommandsTest {
         try {
             listener.onSlashCommandInteraction(event);
             verify(event, never()).deferReply(true);
-            assertTrue(
-                java.nio.file.Files.readString(directory.resolve("ai-visitor.properties")).contains("channel=")
-            );
+            assertTrue(access.visitors.isChannel(ChannelControlsTest.CHANNEL));
             when(member.hasPermission(Permission.MANAGE_SERVER)).thenReturn(true);
             // Member cache no longer contains this actor.
             listener.onSlashCommandInteraction(event);
             verify(hook).editOriginal(contains("サーバー管理権限がなくなった"));
 
-            assertTrue(
-                java.nio.file.Files.readString(directory.resolve("ai-visitor.properties")).contains("channel=")
-            );
+            assertTrue(access.visitors.isChannel(ChannelControlsTest.CHANNEL));
             when(guild.getMemberById(userId)).thenReturn(member);
             listener.onSlashCommandInteraction(event);
             verify(hook).editOriginal(contains("指定を解除しました"));
-            assertFalse(
-                java.nio.file.Files.readString(directory.resolve("ai-visitor.properties")).contains("channel=")
-            );
+            var reloaded = new AiAccess(directory, "").visitors;
+            assertFalse(reloaded.isChannel(ChannelControlsTest.CHANNEL));
+            assertTrue(reloaded.isChannel(ChannelControlsTest.THREAD));
             // Repeated clear also succeeds.
             listener.onSlashCommandInteraction(event);
             verify(hook, times(2)).editOriginal(contains("指定を解除しました"));
@@ -154,7 +168,7 @@ class AiCommandsTest {
     }
 
     @Test
-    void visitorChannelRejectsMissingActionAndConflictingOptions() throws Exception {
+    void visitorChannelAlwaysRequiresAnExplicitTargetIncludingDelete() throws Exception {
         var access = new AiAccess(directory, "");
         access.visitors.setChannel(ChannelControlsTest.CHANNEL);
         var member = VisitorAccessTest.visitor();
@@ -163,20 +177,17 @@ class AiCommandsTest {
         var listener = commands(access);
         try {
             listener.onSlashCommandInteraction(event);
-            verify(event).reply(contains("設定する ch"));
+            verify(event).reply(contains("追加・解除する ch"));
             var delete = mock(OptionMapping.class);
             when(delete.getAsBoolean()).thenReturn(false);
             when(event.getOption("delete")).thenReturn(delete);
             listener.onSlashCommandInteraction(event);
-            verify(event, times(2)).reply(contains("設定する ch"));
+            verify(event, times(2)).reply(contains("追加・解除する ch"));
             when(delete.getAsBoolean()).thenReturn(true);
-            when(event.getOption("ch")).thenReturn(mock(OptionMapping.class));
             listener.onSlashCommandInteraction(event);
-            verify(event).reply(contains("解除時は ch を指定せず"));
+            verify(event, times(3)).reply(contains("追加・解除する ch"));
             verify(event, never()).deferReply(true);
-            assertTrue(
-                java.nio.file.Files.readString(directory.resolve("ai-visitor.properties")).contains("channel=")
-            );
+            assertTrue(new AiAccess(directory, "").visitors.isChannel(ChannelControlsTest.CHANNEL));
         } finally {
             listener.onShutdown(null);
         }
