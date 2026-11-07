@@ -198,16 +198,13 @@ public final class AiCommands extends ListenerAdapter {
         var option = event.getOption("ch");
         var deleteOption = event.getOption("delete");
         boolean delete = deleteOption != null && deleteOption.getAsBoolean();
-        if (delete && option != null) {
-            event.reply("解除時は ch を指定せず delete:true だけを指定してください。").setEphemeral(true).queue();
+        if(option == null) {
+            event.reply("追加・解除する ch を指定してください。解除は ch と delete:true を併せて指定してください。")
+                    .setEphemeral(true).queue();
             return;
         }
-        if (!delete && option == null) {
-            event.reply("設定する ch、または解除する delete:true を指定してください。").setEphemeral(true).queue();
-            return;
-        }
-        var channel = option == null ? null : option.getAsChannel();
-        if (channel != null && (!guild.equals(channel.getGuild().getId()) || !channel.getType().isMessage())) {
+        var channel = option.getAsChannel();
+        if(!guild.equals(channel.getGuild().getId()) || !channel.getType().isMessage()) {
             event.reply("対象サーバーのメッセージを投稿できるチャンネルを指定してください。").setEphemeral(true).queue();
             return;
         }
@@ -221,15 +218,15 @@ public final class AiCommands extends ListenerAdapter {
                         }
                         try {
                             if (delete) {
-                                access.visitors.clearChannel();
-                                say(hook, "visitorチャンネルの指定を解除しました。visitorによる利用ロール例外は無効です。");
+                                access.visitors.clearChannel(channel.getId());
+                                say(hook, "<#"+ channel.getId() +"> のvisitorチャンネル指定を解除しました。他の指定は維持しています。");
                                 return;
                             }
                             access.visitors.setChannel(channel.getId());
                             say(
                                 hook,
                                 "<#" + channel.getId() +
-                                    ("> をvisitorチャンネルに設定しました。" +
+                                    ("> をvisitorチャンネルに追加しました。他の指定は維持しています。" +
                                         "GvDvisitor ロールの人はBot・生成キャラロールへの明示メンションでAIを呼べます" +
                                         "（1人60秒に1回。/gvd role 登録ロールを持つ人は制限対象外）。")
                             );
