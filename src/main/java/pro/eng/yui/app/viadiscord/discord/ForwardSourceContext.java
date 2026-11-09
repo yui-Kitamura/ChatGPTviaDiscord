@@ -31,7 +31,7 @@ public final class ForwardSourceContext {
                 break;
             }
             result.append(MessageNeighborhoodContext.load(
-                guild, requester, ref.getChannelId(), ref.getMessageId(), "転送元", "元投稿"
+                guild, requester, ref.getChannelId(), ref.getMessageId(), "転送元", "元投稿", true
             ));
         }
         return result.toString();

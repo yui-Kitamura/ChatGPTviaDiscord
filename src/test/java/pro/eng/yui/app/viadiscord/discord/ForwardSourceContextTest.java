@@ -52,19 +52,22 @@ public class ForwardSourceContextTest {
 
     @SuppressWarnings("unchecked")
     void source(GuildMessageChannel channel, Message original, List<Message> before, List<Message> after) {
+        String id = original == null ? "100" : original.getId();
         RestAction<Message> retrieve = mock(RestAction.class, RETURNS_SELF);
-        when(channel.retrieveMessageById("100")).thenReturn(retrieve);
+        when(channel.retrieveMessageById(id)).thenReturn(retrieve);
         when(retrieve.complete()).thenReturn(original);
-        var beforeAction = mock(MessageHistory.MessageRetrieveAction.class, RETURNS_SELF);
-        var afterAction = mock(MessageHistory.MessageRetrieveAction.class, RETURNS_SELF);
-        var beforeHistory = mock(MessageHistory.class);
-        var afterHistory = mock(MessageHistory.class);
-        when(channel.getHistoryBefore("100", 20)).thenReturn(beforeAction);
-        when(channel.getHistoryAfter("100", 20)).thenReturn(afterAction);
-        when(beforeAction.complete()).thenReturn(beforeHistory);
-        when(afterAction.complete()).thenReturn(afterHistory);
-        when(beforeHistory.getRetrievedHistory()).thenReturn(before);
-        when(afterHistory.getRetrievedHistory()).thenReturn(after);
+        var beforeAction = page(before);
+        var afterAction = page(after);
+        when(channel.getHistoryBefore(eq(id), anyInt())).thenReturn(beforeAction);
+        when(channel.getHistoryAfter(eq(id), anyInt())).thenReturn(afterAction);
+    }
+
+    private static MessageHistory.MessageRetrieveAction page(List<Message> posts) {
+        var action = mock(MessageHistory.MessageRetrieveAction.class, RETURNS_SELF);
+        var history = mock(MessageHistory.class);
+        when(action.complete()).thenReturn(history);
+        when(history.getRetrievedHistory()).thenReturn(posts);
+        return action;
     }
 
     @Test
@@ -166,8 +169,115 @@ public class ForwardSourceContextTest {
         assertTrue(result.indexOf("before-20") < result.indexOf("center"));
         assertTrue(result.indexOf("after-20") > result.indexOf("center"));
         assertEquals(40, result.split("\\[前後の投稿\\]", -1).length - 1);
+        verify(channel).getHistoryBefore("100", 100);
+        verify(channel).getHistoryAfter("100", 100);
+    }
+
+    @Test
+    void appsDoNotConsumeUserQuotaAndBothSidesContinueAcrossPages() {
+        var before = new ArrayList<Message>();
+        var after = new ArrayList<Message>();
+        for(int offset=1; offset<=100; offset++) {
+            var left = post(1_100 - offset, "left-app-" + offset);
+            var right = post(1_100 + offset, "right-app-" + offset);
+            if (offset % 3 == 0) {
+                when(left.getAuthor().isBot()).thenReturn(true);
+                when(right.getAuthor().isBot()).thenReturn(true);
+            } else if (offset % 3 == 1) {
+                when(left.isWebhookMessage()).thenReturn(true);
+                when(right.isWebhookMessage()).thenReturn(true);
+            } else {
+                when(left.getApplicationIdLong()).thenReturn(123L);
+                when(right.getApplicationIdLong()).thenReturn(123L);
+            }
+            before.add(left);
+            after.add(right);
+        }
+        Collections.reverse(before);
+        Collections.reverse(after);
+        source(post(1_100, "center"), before, after);
+        when(ref.getMessageId()).thenReturn("1100");
+        var earlier = new ArrayList<Message>();
+        var later = new ArrayList<Message>();
+        for(int offset=1; offset<=21; offset++) {
+            earlier.add(post(1_000 - offset, "earlier-user-" + offset));
+            later.add(post(1_200 + offset, "later-user-" + offset));
+        }
+        var nextBefore = page(earlier);
+        var nextAfter = page(later);
+        when(channel.getHistoryBefore("1000", 100)).thenReturn(nextBefore);
+        when(channel.getHistoryAfter("1200", 100)).thenReturn(nextAfter);
+        String result = ForwardSourceContext.load(guild, requester, List.of(forward));
+        assertTrue(result.contains("earlier-user-20\n"));
+        assertTrue(result.contains("later-user-20\n"));
+        assertFalse(result.contains("earlier-user-21\n"));
+        assertFalse(result.contains("later-user-21\n"));
+        assertTrue(result.contains("left-app-1\n"));
+        assertTrue(result.contains("right-app-1\n"));
+        assertTrue(result.contains("app_origin=true"));
+        assertTrue(result.indexOf("earlier-user-20") < result.indexOf("[元投稿]"));
+        assertTrue(result.indexOf("later-user-20") > result.indexOf("[元投稿]"));
+    }
+
+    @Test
+    void textBudgetPreservesCountedUsersBeforeAppExcerpts() {
+        when(ref.getMessageId()).thenReturn("1100");
+        var before = new ArrayList<Message>();
+        for(int offset=1; offset<=70; offset++) {
+            var message = post(1_100 - offset, (offset <= 50 ? "app-" : "user-") + offset + "x".repeat(2_000));
+            when(message.getAuthor().isBot()).thenReturn(offset <= 50);
+            before.add(message);
+        }
+        source(post(1_100, "original"), before, List.of());
+        String result = ForwardSourceContext.load(guild, requester, List.of(forward));
+        assertTrue(result.length() <= 100_000);
+        assertTrue(result.contains("user-70x"));
+        assertTrue(result.contains("app-1x"));
+        assertTrue(result.contains("[元投稿]"));
+        assertTrue(result.contains("全体上限による省略あり"));
+    }
+
+    @Test
+    void appFloodHasBoundedScanningAndCannotTruncateAwayOriginal() {
+        when(ref.getMessageId()).thenReturn("1100");
+        var apps = new ArrayList<Message>();
+        for(int offset=1; offset<=1_000; offset++) {
+            var app = post(1_100 - offset, "app-" + offset + "x".repeat(2_000));
+            when(app.getAuthor().isBot()).thenReturn(true);
+            apps.add(app);
+        }
+        source(post(1_100, "important original"), List.of(), List.of(post(1_101, "nearby user")));
+        when(channel.getHistoryBefore(anyString(), eq(100))).thenAnswer(call -> {
+            int start = 1_100 - Integer.parseInt(call.getArgument(0));
+            return page(apps.subList(start, Math.min(start + 100, apps.size())));
+        });
+        String result = ForwardSourceContext.load(guild, requester, List.of(forward));
+        assertTrue(result.length() <= 100_000);
+        assertTrue(result.contains("[元投稿]"));
+        assertTrue(result.contains("important original"));
+        assertTrue(result.contains("nearby user"));
+        assertTrue(result.contains("app-1x"));
+        assertTrue(result.contains("取得件数上限による省略あり"));
+        assertTrue(result.contains("全体上限による省略あり"));
+        verify(channel, times(10)).getHistoryBefore(anyString(), eq(100));
+        assertTrue(result.endsWith("--- 転送元コンテキスト終わり ---\n"));
+    }
+
+    @Test
+    void replyKeepsItsExistingTwentyPostWindow() {
+        when(forward.getType()).thenReturn(MessageType.INLINE_REPLY);
+        when(forward.getChannelId()).thenReturn("channel");
+        var apps = new ArrayList<Message>();
+        for(int offset=1; offset<=20; offset++) {
+            var app = post(100 - offset, "reply-app-" + offset);
+            when(app.getAuthor().isBot()).thenReturn(true);
+            apps.add(app);
+        }
+        source(post(100, "reply target"), apps, List.of());
+        String result = DiscordReplyContext.surrounding(guild, requester, forward);
+        assertTrue(result.contains("reply-app-20\n"));
         verify(channel).getHistoryBefore("100", 20);
-        verify(channel).getHistoryAfter("100", 20);
+        verify(channel, never()).getHistoryBefore(anyString(), eq(100));
     }
 
     @Test
