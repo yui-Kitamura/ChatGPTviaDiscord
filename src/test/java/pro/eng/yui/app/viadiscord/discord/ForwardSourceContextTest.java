@@ -95,6 +95,23 @@ public class ForwardSourceContextTest {
         assertTrue(result.contains("--- #開発：相談 (channel_id=channel) ---"));
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.NullSource
+    @org.junit.jupiter.params.provider.ValueSource(strings = "0")
+    void omittedSourceGuildStillExpandsOnlyChannelsInCurrentGuild(String sourceGuild) {
+        when(ref.getGuildId()).thenReturn(sourceGuild);
+        source(post(100, "source with omitted guild"), List.of(post(99, "before")), List.of(post(101, "after")));
+        String result = ForwardSourceContext.load(guild, requester, List.of(mock(Message.class), forward));
+        assertTrue(result.contains("source with omitted guild"));
+        assertTrue(result.contains("before"));
+        assertTrue(result.contains("after"));
+
+        when(guild.getGuildChannelById("channel")).thenReturn(null);
+        clearInvocations(channel);
+        assertTrue(ForwardSourceContext.load(guild, requester, List.of(forward)).contains("未取得"));
+        verify(channel, never()).retrieveMessageById(anyString());
+    }
+
     @Test
     void outsideGuildMissingReferenceAndOrdinaryPostsNeverFetch() {
         when(ref.getGuildId()).thenReturn("elsewhere");
@@ -173,8 +190,13 @@ public class ForwardSourceContextTest {
         verify(channel).getHistoryAfter("100", 100);
     }
 
-    @Test
-    void appsDoNotConsumeUserQuotaAndBothSidesContinueAcrossPages() {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = { false, true })
+    void appsDoNotConsumeUserQuotaAndBothSidesContinueAcrossPages(boolean reply) {
+        if (reply) {
+            when(forward.getType()).thenReturn(MessageType.INLINE_REPLY);
+            when(forward.getChannelId()).thenReturn("channel");
+        }
         var before = new ArrayList<Message>();
         var after = new ArrayList<Message>();
         for(int offset=1; offset<=100; offset++) {
@@ -207,7 +229,8 @@ public class ForwardSourceContextTest {
         var nextAfter = page(later);
         when(channel.getHistoryBefore("1000", 100)).thenReturn(nextBefore);
         when(channel.getHistoryAfter("1200", 100)).thenReturn(nextAfter);
-        String result = ForwardSourceContext.load(guild, requester, List.of(forward));
+        String result = reply ? DiscordReplyContext.surrounding(guild, requester, forward) :
+            ForwardSourceContext.load(guild, requester, List.of(forward));
         assertTrue(result.contains("earlier-user-20\n"));
         assertTrue(result.contains("later-user-20\n"));
         assertFalse(result.contains("earlier-user-21\n"));
@@ -215,8 +238,11 @@ public class ForwardSourceContextTest {
         assertTrue(result.contains("left-app-1\n"));
         assertTrue(result.contains("right-app-1\n"));
         assertTrue(result.contains("app_origin=true"));
-        assertTrue(result.indexOf("earlier-user-20") < result.indexOf("[元投稿]"));
-        assertTrue(result.indexOf("later-user-20") > result.indexOf("[元投稿]"));
+        String target = reply ? "[返信対象]" : "[元投稿]";
+        assertTrue(result.indexOf("earlier-user-20") < result.indexOf(target));
+        assertTrue(result.indexOf("later-user-20") > result.indexOf(target));
+        assertTrue(result.contains("前側：取得 ユーザー=20件・アプリ=100件／この入力の本文 ユーザー=20件・アプリ=100件"));
+        assertTrue(result.contains("後側：取得 ユーザー=20件・アプリ=100件／この入力の本文 ユーザー=20件・アプリ=100件"));
     }
 
     @Test
@@ -235,6 +261,7 @@ public class ForwardSourceContextTest {
         assertTrue(result.contains("app-1x"));
         assertTrue(result.contains("[元投稿]"));
         assertTrue(result.contains("全体上限による省略あり"));
+        assertTrue(result.contains("取得 ユーザー=20件・アプリ=50件／この入力の本文 ユーザー=20件"));
     }
 
     @Test
@@ -264,7 +291,7 @@ public class ForwardSourceContextTest {
     }
 
     @Test
-    void replyKeepsItsExistingTwentyPostWindow() {
+    void replyAppOnlyHistoryEndsWithoutCountingAppsAsUsers() {
         when(forward.getType()).thenReturn(MessageType.INLINE_REPLY);
         when(forward.getChannelId()).thenReturn("channel");
         var apps = new ArrayList<Message>();
@@ -276,8 +303,8 @@ public class ForwardSourceContextTest {
         source(post(100, "reply target"), apps, List.of());
         String result = DiscordReplyContext.surrounding(guild, requester, forward);
         assertTrue(result.contains("reply-app-20\n"));
-        verify(channel).getHistoryBefore("100", 20);
-        verify(channel, never()).getHistoryBefore(anyString(), eq(100));
+        verify(channel).getHistoryBefore("100", 100);
+        assertTrue(result.contains("前側：取得 ユーザー=0件・アプリ=20件"));
     }
 
     @Test

@@ -17,7 +17,13 @@ public final class ForwardSourceContext {
             }
 
             var ref = message.getMessageReference();
-            if (ref == null || !guild.getId().equals(ref.getGuildId())) {
+            if (ref == null) {
+                continue;
+            }
+            String sourceGuild = ref.getGuildId();
+            // Discord may omit guild_id on forwards. The neighborhood loader still
+            // resolves the source channel exclusively through the current guild.
+            if (sourceGuild != null && !"0".equals(sourceGuild) && !guild.getId().equals(sourceGuild)) {
                 continue;
             }
 
@@ -31,7 +37,7 @@ public final class ForwardSourceContext {
                 break;
             }
             result.append(MessageNeighborhoodContext.load(
-                guild, requester, ref.getChannelId(), ref.getMessageId(), "転送元", "元投稿", true
+                guild, requester, ref.getChannelId(), ref.getMessageId(), "転送元", "元投稿"
             ));
         }
         return result.toString();
