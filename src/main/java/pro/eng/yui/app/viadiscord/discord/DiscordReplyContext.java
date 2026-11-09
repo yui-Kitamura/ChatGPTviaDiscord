@@ -4,6 +4,8 @@ import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
+import net.dv8tion.jda.api.entities.Guild;
+import net.dv8tion.jda.api.entities.Member;
 import net.dv8tion.jda.api.entities.Message;
 import net.dv8tion.jda.api.entities.MessageType;
 import pro.eng.yui.app.viadiscord.data.local.ChatGptAccounts;
@@ -17,6 +19,18 @@ public final class DiscordReplyContext {
 
     private static final int MAX_BODY = 16000;
     private static final Pattern POST = Pattern.compile("(?m)^(\\d+)：(?:名無しの)?([^\\r\\n]+?)(?: <@&\\d+>)?$");
+
+    public static String surrounding(Guild guild, Member requester, Message source) {
+        var reference = source.getMessageReference();
+        if (source.getType() != MessageType.INLINE_REPLY || reference == null ||
+            !Objects.equals(source.getChannelId(), reference.getChannelId())) {
+            return "";
+        }
+
+        return MessageNeighborhoodContext.load(
+            guild, requester, reference.getChannelId(), reference.getMessageId(), "返信先", "返信対象"
+        );
+    }
 
     static String input(Message source, ChatHistory history, String key) throws IOException {
         return input(source, history, key, source.getContentRaw());

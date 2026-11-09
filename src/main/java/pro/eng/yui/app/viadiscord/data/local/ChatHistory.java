@@ -9,6 +9,8 @@ import java.util.*;
  */
 public final class ChatHistory {
 
+    private static final int MAX_USER_MESSAGES = 40;
+
     public static final class History {
 
         public List<Map<String, Object>> turns = new ArrayList<>();
@@ -92,7 +94,7 @@ public final class ChatHistory {
         value.revision = revision(key);
         if (value.turns == null ||
             value.ids == null ||
-            value.turns.size() > 40 ||
+            userMessages(value.turns) > MAX_USER_MESSAGES ||
             value.nextPost < 1 ||
             value.nextPost > 9_000_000_000_000_000L) {
             throw new IOException("Invalid recent history.");
@@ -256,10 +258,10 @@ public final class ChatHistory {
      * Bound inline attachment history as well as text, before sending and saving.
      */
     public static void trim(List<Map<String, Object>> turns) throws IOException {
-        while (turns.size() > 40) {
+        while (userMessages(turns) > MAX_USER_MESSAGES) {
             removeOldestExchange(turns);
         }
-        while (turns.size() > 2 &&
+        while (userMessages(turns) > 1 &&
             (turns.stream().mapToInt(t -> textLength(t.get("content"))).sum() > 64000 ||
                 ChatGptAccounts.JSON.writeValueAsBytes(turns).length > 16 * 1024 * 1024)) {
             removeOldestExchange(turns);
@@ -268,9 +270,13 @@ public final class ChatHistory {
 
     private static void removeOldestExchange(List<Map<String, Object>> turns) {
         turns.remove(0);
-        if (!turns.isEmpty() && "assistant".equals(turns.getFirst().get("role"))) {
+        while (!turns.isEmpty() && "assistant".equals(turns.getFirst().get("role"))) {
             turns.remove(0);
         }
+    }
+
+    private static long userMessages(List<Map<String, Object>> turns) {
+        return turns.stream().filter(turn -> "user".equals(turn.get("role"))).count();
     }
 
     private static int textLength(Object content) {
