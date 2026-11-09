@@ -140,7 +140,7 @@ class ChatHistoryTest {
     void trimRebasesMessagePositionsAndDeletedReplyRemovesCorrectExchange() throws Exception {
         var history = new ChatHistory(directory);
         var saved = exchanges(history, KEY);
-        for (int i=3; i<22; i++) {
+        for (int i=3; i<42; i++) {
             saved.turns.add(new LinkedHashMap<>(Map.of("role", "user", "content", "q" + i)));
             saved.turns.add(new LinkedHashMap<>(Map.of("role", "assistant", "content", "a" + i)));
             saved.messageTurns.put("user" + i, i * 2);
@@ -150,6 +150,49 @@ class ChatHistoryTest {
         assertFalse(saved.messageTurns.containsKey("user0"));
         history.deleted("123", List.of("user3"));
         assertEquals(2, history.load(KEY).turns.size());
+    }
+
+    @Test
+    void userWindowIgnoresMultipleAssistantPostsAndSurvivesReload() throws Exception {
+        var history = new ChatHistory(directory);
+        var saved = history.load(KEY);
+        for(int question=0; question<40; question++) {
+            saved.turns.add(Map.of("role", "user", "content", "q" + question));
+            for(int post=0; post<16; post++) {
+                saved.turns.add(Map.of("role", "assistant", "content", "a" + post));
+            }
+        }
+        history.save(KEY, saved);
+        assertEquals(680, new ChatHistory(directory).load(KEY).turns.size());
+        saved.turns.add(Map.of("role", "user", "content", "q40"));
+        // The same trim is used before generation, with the latest answer still pending.
+        ChatHistory.trim(saved.turns);
+        assertEquals("q1", saved.turns.getFirst().get("content"));
+        assertEquals("q40", saved.turns.getLast().get("content"));
+        assertEquals(40, saved.turns.stream().filter(t -> "user".equals(t.get("role"))).count());
+        history.save(KEY, saved);
+        assertEquals(saved.turns, new ChatHistory(directory).load(KEY).turns);
+    }
+
+    @Test
+    void userWindowKeepsTextSizeLimit() throws Exception {
+        var turns = new ArrayList<Map<String, Object>>();
+        turns.add(Map.of("role", "user", "content", "old question"));
+        turns.add(Map.of("role", "assistant", "content", "a".repeat(64000)));
+        turns.add(Map.of("role", "user", "content", "latest question"));
+        ChatHistory.trim(turns);
+        assertEquals(List.of(Map.of("role", "user", "content", "latest question")), turns);
+    }
+
+    @Test
+    void sizeTrimmingPreservesAllPostsOfLatestExchange() throws Exception {
+        var turns = new ArrayList<Map<String, Object>>();
+        turns.add(Map.of("role", "user", "content", "latest question"));
+        for(int post=0; post<16; post++) {
+            turns.add(Map.of("role", "assistant", "content", "a".repeat(5000)));
+        }
+        ChatHistory.trim(turns);
+        assertEquals(17, turns.size());
     }
 
     @Test

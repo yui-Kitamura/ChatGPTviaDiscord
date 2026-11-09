@@ -354,6 +354,7 @@ public final class AiConversation implements java.util.function.Consumer<Message
                     batch.stream().map(MessageReceivedEvent::getMessage).toList()
                 );
                 referencedHistory += recent.text();
+                referencedHistory += DiscordReplyContext.surrounding(event.getGuild(), event.getMember(), message);
                 var speakerInput = SpeakerIdentity.input(
                     event.getGuild(),
                     event.getGuild().getMemberById(user),

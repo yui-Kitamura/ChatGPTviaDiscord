@@ -59,8 +59,8 @@ public class ForwardSourceContextTest {
         var afterAction = mock(MessageHistory.MessageRetrieveAction.class, RETURNS_SELF);
         var beforeHistory = mock(MessageHistory.class);
         var afterHistory = mock(MessageHistory.class);
-        when(channel.getHistoryBefore("100", 5)).thenReturn(beforeAction);
-        when(channel.getHistoryAfter("100", 5)).thenReturn(afterAction);
+        when(channel.getHistoryBefore("100", 20)).thenReturn(beforeAction);
+        when(channel.getHistoryAfter("100", 20)).thenReturn(afterAction);
         when(beforeAction.complete()).thenReturn(beforeHistory);
         when(afterAction.complete()).thenReturn(afterHistory);
         when(beforeHistory.getRetrievedHistory()).thenReturn(before);
@@ -144,7 +144,7 @@ public class ForwardSourceContextTest {
     void deletedSourceAndFetchFailureAreExplicitAndDoNotDiscardForward() {
         source(null, List.of(), List.of());
         String result = ForwardSourceContext.load(guild, requester, List.of(forward));
-        assertTrue(result.contains("転送コピーだけ"));
+        assertTrue(result.contains("取得済みの対象本文だけ"));
         verify(channel, never()).getHistoryBefore(anyString(), anyInt());
         when(channel.retrieveMessageById("100")).thenThrow(new IllegalStateException("sensitive payload"));
         result = ForwardSourceContext.load(guild, requester, List.of(forward));
@@ -154,16 +154,69 @@ public class ForwardSourceContextTest {
     }
 
     @Test
+    void expandedWindowIncludesTwentyMessagesOnBothSides() {
+        var before = new ArrayList<Message>();
+        var after = new ArrayList<Message>();
+        for(int offset=1; offset<=20; offset++) {
+            before.add(post(100 - offset, "before-" + offset));
+            after.add(post(100 + offset, "after-" + offset));
+        }
+        source(post(100, "center"), before, after);
+        String result = ForwardSourceContext.load(guild, requester, List.of(forward));
+        assertTrue(result.indexOf("before-20") < result.indexOf("center"));
+        assertTrue(result.indexOf("after-20") > result.indexOf("center"));
+        assertEquals(40, result.split("\\[前後の投稿\\]", -1).length - 1);
+        verify(channel).getHistoryBefore("100", 20);
+        verify(channel).getHistoryAfter("100", 20);
+    }
+
+    @Test
+    void replyIncludesNeighborhoodWithoutRewritingQuotedText() {
+        when(forward.getType()).thenReturn(MessageType.INLINE_REPLY);
+        when(forward.getChannelId()).thenReturn("channel");
+        source(post(100, "転送元と元投稿について"), List.of(post(99, "before")), List.of(post(101, "after")));
+        String result = DiscordReplyContext.surrounding(guild, requester, forward);
+        assertTrue(result.contains("返信先の前後コンテキスト"));
+        assertTrue(result.contains("[返信対象]"));
+        assertTrue(result.contains("転送元と元投稿について"));
+        assertTrue(result.indexOf("before") < result.indexOf("転送元と元投稿について"));
+        assertTrue(result.indexOf("after") > result.indexOf("転送元と元投稿について"));
+    }
+
+    @Test
+    void replyDoesNotFetchOrdinaryOrCrossChannelReferences() {
+        assertEquals("", DiscordReplyContext.surrounding(guild, requester, forward));
+        when(forward.getType()).thenReturn(MessageType.INLINE_REPLY);
+        when(forward.getChannelId()).thenReturn("other");
+        assertEquals("", DiscordReplyContext.surrounding(guild, requester, forward));
+        verifyNoInteractions(channel);
+    }
+
+    @Test
+    void replyPermissionDenialAndFetchFailureAreExplicit() {
+        when(forward.getType()).thenReturn(MessageType.INLINE_REPLY);
+        when(forward.getChannelId()).thenReturn("channel");
+        when(requester.hasPermission(channel, Permission.VIEW_CHANNEL, Permission.MESSAGE_HISTORY)).thenReturn(false);
+        assertTrue(DiscordReplyContext.surrounding(guild, requester, forward).contains("返信先の前後コンテキスト未取得"));
+        verify(channel, never()).retrieveMessageById(anyString());
+        allow(channel);
+        when(channel.retrieveMessageById("100")).thenThrow(new IllegalStateException("private details"));
+        String result = DiscordReplyContext.surrounding(guild, requester, forward);
+        assertTrue(result.contains("未取得"));
+        assertFalse(result.contains("private details"));
+    }
+
+    @Test
     void trimsBodiesLabelsAttachmentsAndDoesNotExpandNestedForwards() {
-        var original = post(100, "x".repeat(2000));
+        var original = post(100, "x".repeat(3000));
         var neighbor = post(101, "");
         when(neighbor.getMessageSnapshots()).thenReturn(
             List.of(MessageInputTest.snapshot("入れ子", mock(Message.Attachment.class)))
         );
         source(original, List.of(), List.of(neighbor));
         String result = ForwardSourceContext.load(guild, requester, List.of(forward));
-        assertTrue(result.contains("x".repeat(1000)));
-        assertFalse(result.contains("x".repeat(1001)));
+        assertTrue(result.contains("x".repeat(2000)));
+        assertFalse(result.contains("x".repeat(2001)));
         assertTrue(result.contains("本文省略あり"));
         assertTrue(result.contains("添付あり・本文未取得"));
         assertTrue(result.contains("入れ子"));
