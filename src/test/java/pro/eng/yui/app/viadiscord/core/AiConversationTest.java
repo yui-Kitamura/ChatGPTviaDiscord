@@ -773,8 +773,14 @@ class AiConversationTest {
         assertEquals(captor.getValue().getFirst(), history.load(key).turns.getFirst());
     }
 
-    @Test
-    void bundledForwardSourceContextReachesProviderButIsNotPersisted() throws Exception {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+        "false, false, false", "true, false, false", "false, true, false",
+        "false, false, true", "true, false, true", "false, true, true"
+    })
+    void bundledForwardSourceContextReachesProviderButIsNotPersisted(
+        boolean forwardFirst, boolean inlineNote, boolean omittedGuild
+    ) throws Exception {
         var captured = new AtomicReference<List<Map<String, Object>>>();
         var transport = mock(OpenAiTransport.class);
         when(
@@ -802,9 +808,14 @@ class AiConversationTest {
             List.of(ForwardSourceContextTest.post(101, "後の結論"))
         );
         String guildId = note.guild.getId();
-        when(source.ref.getGuildId()).thenReturn(guildId);
-        when(forwarded.message.getMessageSnapshots()).thenReturn(List.of(MessageInputTest.snapshot("転送コピー")));
+        when(source.ref.getGuildId()).thenReturn(omittedGuild ? "0" : guildId);
+        var snapshot = MessageInputTest.snapshot("転送コピー");
+        when(forwarded.message.getMessageSnapshots()).thenReturn(List.of(snapshot));
         when(forwarded.message.getMessageReference()).thenReturn(source.ref);
+        if (inlineNote) {
+            when(note.message.getMessageSnapshots()).thenReturn(List.of(snapshot));
+            when(note.message.getMessageReference()).thenReturn(source.ref);
+        }
         when(note.guild.getGuildChannelById("channel")).thenReturn(source.channel);
         when(note.guild.getSelfMember()).thenReturn(source.bot);
         when(
@@ -834,8 +845,13 @@ class AiConversationTest {
                 history,
                 "guide"
             )) {
-                ai.accept(note.messageEvent);
-                ai.accept(forwarded.messageEvent);
+                var listener = new GvdListener(note.controls, ai);
+                if (inlineNote) {
+                    listener.onMessageReceived(note.messageEvent);
+                } else {
+                    listener.onMessageReceived((forwardFirst ? forwarded : note).messageEvent);
+                    listener.onMessageReceived((forwardFirst ? note : forwarded).messageEvent);
+                }
                 assertTrue(done.await(5, TimeUnit.SECONDS));
             }
         }
