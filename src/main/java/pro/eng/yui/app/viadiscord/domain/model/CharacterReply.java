@@ -54,12 +54,12 @@ public record CharacterReply(String summary, List<CharacterSpec> characters, Lis
         JsonNode root = ChatGptAccounts.JSON.reader().with(
             com.fasterxml.jackson.databind.DeserializationFeature.FAIL_ON_TRAILING_TOKENS
         ).readTree(raw);
+        // The 16-post limit is a generator instruction; accept excess posts without discarding the response.
         if (!root.isObject() ||
             !root.path("characters").isArray() ||
             root.path("characters").size() > 8 ||
             !root.path("posts").isArray() ||
-            root.path("posts").isEmpty() ||
-            root.path("posts").size() > 16) {
+            root.path("posts").isEmpty()) {
             throw new IOException("Invalid character reply schema.");
         }
 

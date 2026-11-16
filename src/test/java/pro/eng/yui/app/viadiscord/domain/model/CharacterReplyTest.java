@@ -23,6 +23,32 @@ public class CharacterReplyTest {
     }
 
     @Test
+    void acceptsAllPostsBeyondThePromptLimitAndKeepsReferences() throws Exception {
+        var root = pro.eng.yui.app.viadiscord.data.local.ChatGptAccounts.JSON.readTree(REPLY);
+        var posts = (com.fasterxml.jackson.databind.node.ArrayNode) root.path("posts");
+        posts.removeAll();
+        for(int i=0; i<20; i++) {
+            var post = posts.addObject();
+            post.put("character", "案内人");
+            post.put("text", "説明"+ i);
+            post.putArray("references").add(4 + i);
+        }
+
+        var result = CharacterReply.parse(root.toString(), context, 5);
+        assertEquals(20, result.posts().size());
+        for(int i=0; i<20; i++) {
+            assertEquals("説明"+ i, result.posts().get(i).text());
+            assertEquals(List.of(4L + i), result.posts().get(i).references());
+        }
+        assertTrue(CharacterReply.instructions(context, 5).contains("posts は1〜16件"));
+
+        ((com.fasterxml.jackson.databind.node.ArrayNode) posts.get(19).path("references")).add(24);
+        assertThrows(java.io.IOException.class, () -> CharacterReply.parse(root.toString(), context, 5));
+        posts.removeAll();
+        assertThrows(java.io.IOException.class, () -> CharacterReply.parse(root.toString(), context, 5));
+    }
+
+    @Test
     void rejectsMalformedUnknownSpeakersAndFutureReferencesBeforeRoleCreation() {
         for (String invalid : List.of(
             "ordinary answer",
