@@ -175,6 +175,102 @@ class AiConversationTest {
         verify(transport, never()).respond(anyString(), anyString(), anyString(), anyList(), any());
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+        "THREAD, before-send", "THREAD, other-post", "THREAD, reply-target",
+        "QA, before-send", "QA, other-post", "QA, reply-target"
+    })
+    void deliveryAppliesDeletionAtTheFirstSendBoundary(ResponseMode mode, String scenario) throws Exception {
+        boolean thread = mode == ResponseMode.THREAD;
+        boolean beforeSend = "before-send".equals(scenario);
+        boolean continues = "other-post".equals(scenario);
+        boolean targetDeleted = "reply-target".equals(scenario);
+        String channelId = ChannelControlsTest.CHANNEL;
+        var h = event(USER, true, "request", "question");
+        var channel = h.messageEvent.getChannel();
+        when(h.message.getGuild()).thenReturn(h.guild);
+        when(h.message.getChannel()).thenReturn(channel);
+        var transport = mock(OpenAiTransport.class);
+        when(transport.respond(anyString(), anyString(), anyString(), anyList(), any(OpenAiTransport.Progress.class)))
+                .thenReturn(thread ? CharacterReplyTest.REPLY.replace("[4]", "[]") : "答".repeat(2500));
+        var history = new ChatHistory(directory.resolve("history"));
+        String key = channelId + "-" +
+            UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        var previous = history.load(key);
+        previous.turns.add(ChatTimestamps.turn("user", "old input", OffsetDateTime.now()));
+        previous.turns.add(ChatTimestamps.turn("assistant", "old answer", OffsetDateTime.now()));
+        previous.messageTurns.put("older-post", 0);
+        history.save(key, previous);
+        var settings = new ResponseSettings(directory.resolve("response.properties"));
+        settings.setMode(channelId, mode);
+        var gateway = new CharacterRoles.RoleGateway() {
+
+            public boolean exists(String id) {
+                return true;
+            }
+
+            public String create(String name) {
+                return "456789012345678901";
+            }
+        };
+        var summary = mock(Message.class);
+        when(summary.getId()).thenReturn("summary");
+        var postAction = mock(net.dv8tion.jda.api.requests.restaction.MessageCreateAction.class, RETURNS_SELF);
+        var post = mock(Message.class);
+        when(post.getId()).thenReturn("post");
+        when(postAction.complete()).thenReturn(post);
+        when(channel.sendMessage(anyString())).thenReturn(postAction);
+        var completed = new AtomicInteger();
+        try (var accounts = new ChatGptAccounts(directory.resolve("auth"));
+            var session = new ChatGptSession(accounts, transport, 0)) {
+            account(accounts);
+            try (var ai = new AiConversation(
+                new AiAccess(directory, ROLE), h.controls, session, transport, settings, history, "guide",
+                guild -> gateway
+            )) {
+                ai.onResponseCompleted(completed::incrementAndGet);
+                if (beforeSend) {
+                    when(h.message.reply(anyString())).thenAnswer(i -> {
+                        ai.deleted(channelId, List.of("older-post"));
+                        return h.reply;
+                    });
+                } else if (thread) {
+                    when(h.reply.complete()).thenAnswer(i -> {
+                        ai.deleted(channelId, List.of(targetDeleted ? "request" : "older-post"));
+                        return summary;
+                    });
+                } else {
+                    var chunks = new AtomicInteger();
+                    doAnswer(i -> {
+                        if (chunks.getAndIncrement() == 0) {
+                            ai.deleted(channelId, List.of(targetDeleted ? "request" : "older-post"));
+                        }
+                        i.<java.util.function.Consumer<Message>>getArgument(0).accept(summary);
+                        return null;
+                    }).when(h.reply).queue(any(), any());
+                }
+                ai.accept(h.messageEvent);
+                ai.switchMode(h.guild, channel, ResponseMode.QA).get(5, TimeUnit.SECONDS);
+            }
+        }
+
+        if (thread) {
+            verify(h.reply, times(beforeSend ? 0 : 1)).complete();
+            verify(postAction, times(continues ? 1 : 0)).complete();
+        } else {
+            verify(h.reply, times(continues ? 2 : beforeSend ? 0 : 1)).queue(any(), any());
+        }
+        assertEquals(continues ? 1 : 0, completed.get());
+        var saved = history.load(key);
+        assertEquals(targetDeleted ? 2 : 0, saved.turns.size());
+        assertNull(history.replyBody(key, "summary"));
+        assertNull(history.replyBody(key, "post"));
+        if (thread && continues) {
+            assertEquals(Map.of(1L, "summary", 2L, "post"), saved.postMessages);
+            assertEquals(3, saved.nextPost);
+        }
+    }
+
     GvdListenerTest event(String user, boolean allowed, String id, String content) throws Exception {
         var h = new GvdListenerTest();
         h.directory = directory;

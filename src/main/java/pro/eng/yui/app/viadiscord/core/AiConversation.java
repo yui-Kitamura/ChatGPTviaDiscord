@@ -30,6 +30,7 @@ import pro.eng.yui.app.viadiscord.discord.ForwardMessageBatcher;
 import pro.eng.yui.app.viadiscord.discord.ForwardSourceContext;
 import pro.eng.yui.app.viadiscord.discord.MessageFeedback;
 import pro.eng.yui.app.viadiscord.discord.MessageInput;
+import pro.eng.yui.app.viadiscord.discord.ReplySendGuard;
 import pro.eng.yui.app.viadiscord.discord.SpeakerIdentity;
 import pro.eng.yui.app.viadiscord.discord.ServerModelContext;
 import pro.eng.yui.app.viadiscord.discord.SourceNotes;
@@ -149,6 +150,21 @@ public final class AiConversation implements java.util.function.Consumer<Message
     private boolean deleted(List<MessageReceivedEvent> batch) {
         synchronized (deletedRequests) {
             return batch.stream().anyMatch(event -> Boolean.TRUE.equals(deletedRequests.get(event)));
+        }
+    }
+
+    private boolean deleted(MessageReceivedEvent event) {
+        synchronized (deletedRequests) {
+            return Boolean.TRUE.equals(deletedRequests.get(event));
+        }
+    }
+
+    private void saveDeliveredReply(String key, ChatHistory.History saved, String id, String body)
+        throws java.io.IOException {
+        try {
+            history.saveReply(key, saved, id, body);
+        } catch (ChatHistory.Invalidated ignored) {
+            // Delivery can finish even when the conversation snapshot can no longer be saved.
         }
     }
 
@@ -484,39 +500,63 @@ public final class AiConversation implements java.util.function.Consumer<Message
                 saved.turns = input;
                 saved.turns.add(ChatTimestamps.turn("assistant", response, responseTime));
                 batch.forEach(e -> saved.ids.add(e.getMessage().getId()));
-                history.save(key, saved);
                 String sourceNote = feedback.sourceNote(generated == null ? response : SourceNotes.body(generated));
                 String display = response + (sourceNote.isEmpty() ? "" : "\n\n" + sourceNote);
+                if (deleted(batch)) {
+                    return;
+                }
+                ReplySendGuard guard = first -> {
+                    if (first == false) {
+                        return !deleted(event);
+                    }
+                    if (deleted(batch)) {
+                        return false;
+                    }
+                    if (context.mode() == ResponseMode.THREAD) {
+                        history.beginThreadDelivery(key, saved);
+                    } else {
+                        history.save(key, saved);
+                    }
+                    return true;
+                };
                 if (generated == null) {
                     feedback.reply(
                         display,
                         responseCompleted,
                         sent -> {
                             try {
-                                history.saveReply(key, saved, sent.getId(), display);
+                                saveDeliveredReply(key, saved, sent.getId(), display);
                             } catch (java.io.IOException error) {
                                 FailureDiagnostics.log("REPLY_CONTEXT_SAVE", error, sent.getId());
                             }
-                        }
+                        },
+                        guard
                     );
                 } else {
-                    ThreadReplySender.send(
-                        message,
-                        generated,
-                        firstPost,
-                        roles,
-                        saved,
-                        () -> history.save(key, saved),
-                        (id, body) -> history.saveReply(key, saved, id, body),
-                        sourceNote
-                    );
-                    responseCompleted.run();
+                    try {
+                        boolean sent = ThreadReplySender.send(
+                            message,
+                            generated,
+                            firstPost,
+                            roles,
+                            saved,
+                            (number, id) -> history.saveDeliveredPost(key, saved, number, id),
+                            (id, body) -> saveDeliveredReply(key, saved, id, body),
+                            sourceNote,
+                            guard
+                        );
+                        if (sent) {
+                            responseCompleted.run();
+                        }
+                    } finally {
+                        history.endThreadDelivery(saved);
+                    }
                 }
             } catch (AttachmentInput.Unavailable error) {
                 FailureDiagnostics.log("ATTACHMENT", error);
                 feedback.reply(error.getMessage());
             } catch (ChatHistory.Invalidated ignored) {
-                // Deletion invalidates the entire in-flight response, including derived content.
+                // A deletion before delivery invalidates the generated response.
             } catch (ChannelHistoryContext.Unavailable error) {
                 FailureDiagnostics.log("CHANNEL_HISTORY", error);
                 feedback.reply(error.getMessage());
