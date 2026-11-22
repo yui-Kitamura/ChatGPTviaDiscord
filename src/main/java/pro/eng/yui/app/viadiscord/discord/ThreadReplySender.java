@@ -26,6 +26,12 @@ public final class ThreadReplySender {
         void run(String id, String body) throws IOException;
     }
 
+    @FunctionalInterface
+    public interface SavePost {
+
+        void run(long number, String id) throws IOException;
+    }
+
     static void send(
         Message source,
         CharacterReply reply,
@@ -68,17 +74,34 @@ public final class ThreadReplySender {
         SaveReply saveReply,
         String sourceNote
     ) throws IOException {
+        send(source, reply, firstPost, roles, saved, (number, id) -> save.run(), saveReply, sourceNote, first -> true);
+    }
+
+    public static boolean send(
+        Message source,
+        CharacterReply reply,
+        long firstPost,
+        List<ResponseSettings.CharacterRole> roles,
+        ChatHistory.History saved,
+        SavePost save,
+        SaveReply saveReply,
+        String sourceNote,
+        ReplySendGuard guard
+    ) throws IOException {
         String summaryBody = firstPost + ">> " + reply.summary();
-        Message summary = source.reply(summaryBody)
+        var summaryAction = source.reply(summaryBody)
                 .mentionRepliedUser(false)
                 .setAllowedMentions(List.of())
                 .setSuppressedNotifications(
                     true
                 )
-                .failOnInvalidReply(true)
-                .complete();
+                .failOnInvalidReply(true);
+        if (guard.canSend(true) == false) {
+            return false;
+        }
+        Message summary = summaryAction.complete();
         saved.postMessages.put(firstPost, summary.getId());
-        save.run();
+        save.run(firstPost, summary.getId());
         saveReply.run(summary.getId(), summaryBody);
         Map<String, String> roleIds = roles.stream().collect(
             Collectors.toMap(r -> r.character().name(), ResponseSettings.CharacterRole::roleId)
@@ -109,18 +132,25 @@ public final class ThreadReplySender {
             text.append(post.text());
             boolean first = true;
             for (String chunk : DiscordText.split(text.toString())) {
+                if (guard.canSend(false) == false) {
+                    return false;
+                }
                 Message sent = source.getChannel().sendMessage(chunk).setAllowedMentions(List.of()).complete();
                 if (first) {
                     saved.postMessages.put(number, sent.getId());
-                    save.run();
+                    save.run(number, sent.getId());
                     first = false;
                 }
                 saveReply.run(sent.getId(), text.toString());
             }
         }
         for (String chunk : DiscordText.split(sourceNote)) {
+            if (guard.canSend(false) == false) {
+                return false;
+            }
             Message sent = source.getChannel().sendMessage(chunk).setAllowedMentions(List.of()).complete();
             saveReply.run(sent.getId(), sourceNote);
         }
+        return guard.canSend(false);
     }
 }

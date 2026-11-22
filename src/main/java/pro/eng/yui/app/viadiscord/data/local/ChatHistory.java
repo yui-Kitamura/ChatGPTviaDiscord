@@ -26,6 +26,10 @@ public final class ChatHistory {
     private final Path directory;
     private final Map<String, Long> revisions = new HashMap<>();
     private final Set<String> blockedChannels = new HashSet<>();
+    private final Map<History, ThreadDelivery> threadDeliveries = new HashMap<>();
+
+    private record ThreadDelivery(String channelId, Set<String> deletedIds) {
+    }
 
     public static final class Invalidated extends IOException {
 
@@ -134,6 +138,32 @@ public final class ChatHistory {
         return revisions.getOrDefault(key.split("-", 2)[0], 0L);
     }
 
+    public synchronized void beginThreadDelivery(String key, History history) throws IOException {
+        save(key, history);
+        threadDeliveries.put(history, new ThreadDelivery(key.split("-", 2)[0], new HashSet<>()));
+    }
+
+    public synchronized void endThreadDelivery(History history) {
+        threadDeliveries.remove(history);
+    }
+
+    public synchronized void saveDeliveredPost(String key, History history, long number, String id)
+        throws IOException {
+        if (history.revision == revision(key)) {
+            save(key, history);
+            return;
+        }
+        // Preserve numbering from successful sends without restoring deleted turns or post IDs.
+        var delivery = threadDeliveries.get(history);
+        if (delivery.deletedIds().contains(id) || blockedChannels.contains(delivery.channelId())) {
+            return;
+        }
+        var current = load(key);
+        current.postMessages.put(number, id);
+        current.nextPost = Math.max(current.nextPost, number + 1);
+        save(key, current);
+    }
+
     public synchronized void saveReply(String key, History history, String messageId, String body)
         throws IOException {
         requireCurrent(key, history);
@@ -158,6 +188,11 @@ public final class ChatHistory {
             throw new IllegalArgumentException("Invalid channel ID.");
         }
         revisions.merge(channelId, 1L, Long::sum);
+        for (var delivery : threadDeliveries.values()) {
+            if (channelId.equals(delivery.channelId())) {
+                delivery.deletedIds().addAll(messageIds);
+            }
+        }
         if (!Files.isDirectory(directory)) {
             return;
         }

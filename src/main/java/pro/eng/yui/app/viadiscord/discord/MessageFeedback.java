@@ -1,5 +1,7 @@
 package pro.eng.yui.app.viadiscord.discord;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
@@ -134,8 +136,27 @@ public final class MessageFeedback implements OpenAiTransport.Progress, AutoClos
         java.util.function.Consumer<Message> delivered,
         net.dv8tion.jda.api.components.MessageTopLevelComponent... components
     ) {
+        try {
+            reply(text, completed, delivered, first -> true, components);
+        } catch (IOException failure) {
+            throw new UncheckedIOException(failure);
+        }
+    }
+
+    public void reply(
+        String text,
+        Runnable completed,
+        java.util.function.Consumer<Message> delivered,
+        ReplySendGuard guard,
+        net.dv8tion.jda.api.components.MessageTopLevelComponent... components
+    ) throws IOException {
         deferred = true;
-        sendChunks(DiscordText.split(text), 0, completed, delivered, components);
+        try {
+            sendChunks(DiscordText.split(text), 0, completed, delivered, guard, components);
+        } catch (IOException failure) {
+            deferred = false;
+            throw failure;
+        }
     }
 
     private void sendChunks(
@@ -143,8 +164,9 @@ public final class MessageFeedback implements OpenAiTransport.Progress, AutoClos
         int index,
         Runnable completed,
         java.util.function.Consumer<Message> delivered,
+        ReplySendGuard guard,
         net.dv8tion.jda.api.components.MessageTopLevelComponent... components
-    ) {
+    ) throws IOException {
         try {
             var action = message.reply(chunks.get(index))
                     .mentionRepliedUser(false)
@@ -156,20 +178,26 @@ public final class MessageFeedback implements OpenAiTransport.Progress, AutoClos
             if (index == chunks.size() - 1 && components.length > 0) {
                 action.addComponents(components);
             }
+            if (guard.canSend(index == 0) == false) {
+                clear();
+                return;
+            }
             action.queue(
                 sent -> {
                     try {
                         delivered.accept(sent);
                         if (index + 1 < chunks.size()) {
-                            sendChunks(chunks, index + 1, completed, delivered, components);
+                            sendChunks(chunks, index + 1, completed, delivered, guard, components);
                         } else {
                             try {
-                                completed.run();
+                                if (guard.canSend(false)) {
+                                    completed.run();
+                                }
                             } finally {
                                 clear();
                             }
                         }
-                    } catch (RuntimeException failure) {
+                    } catch (IOException | RuntimeException failure) {
                         FailureDiagnostics.log("AI_SEND", failure, message.getId());
                         clear();
                     }
