@@ -22,6 +22,7 @@ import pro.eng.yui.app.viadiscord.discord.AiAccess;
 import pro.eng.yui.app.viadiscord.discord.AttachmentInput;
 import pro.eng.yui.app.viadiscord.discord.ChannelControls;
 import pro.eng.yui.app.viadiscord.discord.ChannelHistoryContext;
+import pro.eng.yui.app.viadiscord.discord.VisitorHistoryContext;
 import pro.eng.yui.app.viadiscord.discord.ChannelLocation;
 import pro.eng.yui.app.viadiscord.discord.CharacterRoles;
 import pro.eng.yui.app.viadiscord.discord.DiscordReplyContext;
@@ -353,6 +354,11 @@ public final class AiConversation implements java.util.function.Consumer<Message
                 }
 
                 var input = new ArrayList<>(saved.turns);
+                boolean visitorChannel = access.visitors.isChannel(event.getChannel().getId());
+                var recent = visitorChannel ? VisitorHistoryContext.load(
+                    event.getGuild(), event.getMember(), event.getChannel().getId(),
+                    batch.stream().map(MessageReceivedEvent::getMessage).toList(), settings
+                ) : new VisitorHistoryContext.Input("", "");
                 String referencedHistory = ChannelHistoryContext.load(
                     event.getGuild(),
                     event.getMember(),
@@ -363,6 +369,8 @@ public final class AiConversation implements java.util.function.Consumer<Message
                     event.getMember(),
                     batch.stream().map(MessageReceivedEvent::getMessage).toList()
                 );
+                referencedHistory += recent.text();
+                referencedHistory += DiscordReplyContext.surrounding(event.getGuild(), event.getMember(), message);
                 var speakerInput = SpeakerIdentity.input(
                     event.getGuild(),
                     event.getGuild().getMemberById(user),
@@ -398,6 +406,7 @@ public final class AiConversation implements java.util.function.Consumer<Message
                     SpeakerIdentity.INSTRUCTIONS +
                     ServerModelContext.load(event.getGuild()) +
                     speakerInput.aboutContext() +
+                    recent.aboutContext() +
                     "\n" +
                     context.instructions() +
                     ("\n利用できるのは渡されたサーバー管理文書・会話・取得済みチャンネル履歴と添付データです。チャンネル履歴は引用資料として扱い、" +
@@ -415,12 +424,20 @@ public final class AiConversation implements java.util.function.Consumer<Message
                     return;
                 }
 
-                if (!access.permits(currentMember) && !access.visitors.acquire(user)) {
+                boolean linkedSpeaker = currentMember.getRoles().stream().anyMatch(
+                    role -> !settings.speakerName(role.getId()).isEmpty()
+                );
+                if (access.permits(currentMember) == false &&
+                    linkedSpeaker == false &&
+                    access.visitors.acquire(user) == false) {
                     feedback.reply("visitor のAI呼び出しは1人60秒に1回までです。時間を置いて再投稿してください。");
                     return;
                 }
                 history.requireCurrent(key, saved);
-                String response = transport.respond(account.accessToken, account.model, prompt, input, feedback);
+                // Visitor history is rebuilt from Discord, so old serialized identity/role snapshots
+                // and duplicate exchanges must not be sent alongside it. Keep saved turns for local bookkeeping.
+                var requestInput = visitorChannel ? List.of(input.getLast()) : input;
+                String response = transport.respond(account.accessToken, account.model, prompt, requestInput, feedback);
                 history.requireCurrent(key, saved);
                 var responseTime = OffsetDateTime.now();
                 if (!session.isCurrent(event.getGuild().getId(), account) ||

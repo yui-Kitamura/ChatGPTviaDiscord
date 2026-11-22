@@ -38,6 +38,7 @@ import pro.eng.yui.app.viadiscord.discord.MessageInputTest;
 import pro.eng.yui.app.viadiscord.discord.ServerModelContextTest;
 import pro.eng.yui.app.viadiscord.discord.SpeakerAboutContextTest;
 import pro.eng.yui.app.viadiscord.discord.VisitorAccessTest;
+import pro.eng.yui.app.viadiscord.discord.VisitorHistoryContextTest;
 import pro.eng.yui.app.viadiscord.domain.model.CharacterReplyTest;
 import pro.eng.yui.app.viadiscord.domain.model.CharacterSpec;
 import pro.eng.yui.app.viadiscord.domain.model.ResponseMode;
@@ -50,6 +51,77 @@ class AiConversationTest {
     @TempDir
     Path directory;
     static final String ROLE = "1565364891676713192", USER = "123456789012345678";
+    private static final String OTHER_CHANNEL = "456789012345678901";
+
+    @Test
+    void visitorChannelRebuildsProviderHistoryWithoutPersistingContextOrReusingOldIdentity() throws Exception {
+        var captured = new AtomicReference<List<Map<String, Object>>>();
+        var transport = mock(OpenAiTransport.class);
+        when(transport.respond(anyString(), anyString(), anyString(), anyList(), any(OpenAiTransport.Progress.class)))
+                .thenAnswer(i -> {
+                    captured.set(List.copyOf(i.getArgument(3)));
+                    return "answer";
+                });
+        var h = event(USER, true, "3", "今回の依頼");
+        var sentMessage = h.reply.complete();
+        doAnswer(i -> {
+            i.<java.util.function.Consumer<Message>>getArgument(0).accept(sentMessage);
+            return null;
+        }).when(h.reply).queue(any(), any());
+        var plain = ChannelHistoryContextTest.post("1", "間のメンションなし発言", false);
+        VisitorHistoryContextTest.history(h.guild, h.messageEvent.getMember(), ChannelControlsTest.CHANNEL, "3", plain);
+        var history = new ChatHistory(directory.resolve("history"));
+        String key = ChannelControlsTest.CHANNEL + "-" +
+            UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        var saved = history.load(key);
+        saved.turns.add(Map.of("role", "user", "content", "obsolete-role-snapshot"));
+        saved.turns.add(Map.of("role", "assistant", "content", "obsolete-answer"));
+        history.save(key, saved);
+        var access = new AiAccess(directory, ROLE);
+        access.visitors.setChannel(ChannelControlsTest.CHANNEL);
+        access.visitors.setChannel(OTHER_CHANNEL);
+        try(var accounts = new ChatGptAccounts(directory.resolve("auth"));
+            var session = new ChatGptSession(accounts, transport, 0)) {
+            account(accounts);
+            try(var ai = new AiConversation(
+                access, h.controls, session, transport,
+                new ResponseSettings(directory.resolve("mode.properties")), history, "guide"
+            )) {
+                var done = new CountDownLatch(1);
+                ai.onResponseCompleted(done::countDown);
+                ai.accept(h.messageEvent);
+                assertTrue(done.await(5, TimeUnit.SECONDS));
+            }
+        }
+        assertEquals(1, captured.get().size());
+        String sent = ChatGptAccounts.JSON.writeValueAsString(captured.get());
+        assertTrue(sent.contains("間のメンションなし発言"));
+        assertTrue(sent.contains("今回の依頼"));
+        assertFalse(sent.contains("obsolete-role-snapshot"));
+        assertFalse(sent.contains("obsolete-answer"));
+        assertFalse(ChatGptAccounts.JSON.writeValueAsString(history.load(key)).contains("間のメンションなし発言"));
+    }
+
+    @Test
+    void unmentionedVisitorSpeechDoesNotStartGenerationOrFetchHistory() throws Exception {
+        var h = event(USER, false, "1", "普通の発言");
+        var member = VisitorAccessTest.visitor();
+        when(h.messageEvent.getMember()).thenReturn(member);
+        var access = new AiAccess(directory, ROLE);
+        access.visitors.setChannel(ChannelControlsTest.CHANNEL);
+        var transport = mock(OpenAiTransport.class);
+        try(var accounts = new ChatGptAccounts(directory.resolve("auth"));
+            var session = new ChatGptSession(accounts, transport, 0);
+            var ai = new AiConversation(
+                access, h.controls, session, transport,
+                new ResponseSettings(directory.resolve("mode.properties")),
+                new ChatHistory(directory.resolve("history")), "guide"
+            )) {
+            new GvdListener(h.controls, ai).onMessageReceived(h.messageEvent);
+        }
+        verifyNoInteractions(transport);
+        verify(h.guild, never()).getGuildChannelById(anyString());
+    }
 
     @Test
     void deleteDuringGenerationDiscardsResponseAndNeverRestoresHistory() throws Exception {
@@ -398,10 +470,14 @@ class AiConversationTest {
     }
 
     @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.CsvSource({ "false,false", "false,true", "true,false", "true,true" })
-    void visitorWithoutNormalRoleReachesProviderAndSecondCallIsThrottled(
+    @org.junit.jupiter.params.provider.CsvSource({
+        "false,false,false", "false,true,false", "true,false,false", "true,true,false",
+        "false,false,true", "false,true,true", "true,false,true", "true,true,true"
+    })
+    void visitorRateLimitExemptsOnlyMembersWithLinkedSpeakerRole(
         boolean threadMode,
-        boolean roleMention
+        boolean roleMention,
+        boolean linkedSpeaker
     ) throws Exception {
         var transport = mock(OpenAiTransport.class);
         when(
@@ -444,6 +520,10 @@ class AiConversationTest {
             var second = event(USER, false, "visitor-second-post", "question");
             when(second.messageEvent.getMember()).thenReturn(member);
             when(second.guild.getMemberById(USER)).thenReturn(member);
+            VisitorHistoryContextTest.history(h.guild, member, ChannelControlsTest.CHANNEL, "visitor-post");
+            VisitorHistoryContextTest.history(second.guild, member, ChannelControlsTest.CHANNEL, "visitor-second-post");
+            when(second.message.getChannel()).thenReturn(channel);
+            when(second.message.getGuild()).thenReturn(second.guild);
             second.mentionBot("<@" + GvdListenerTest.BOT + ">");
             var throttled = new CountDownLatch(1);
             doAnswer(
@@ -472,6 +552,7 @@ class AiConversationTest {
             var done = new CountDownLatch(1);
             var access = new AiAccess(directory, ROLE);
             access.visitors.setChannel(ChannelControlsTest.CHANNEL);
+            access.visitors.setChannel(OTHER_CHANNEL);
             assertFalse(access.permits(member));
             try (var ai = new AiConversation(
                 access,
@@ -487,10 +568,14 @@ class AiConversationTest {
                 var listener = new GvdListener(h.controls, ai);
                 listener.onMessageReceived(h.messageEvent);
                 assertTrue(done.await(5, TimeUnit.SECONDS));
+                // The first call consumed a visitor slot. A different registered role grants no exemption.
+                settings.setSpeakerRole("guest", linkedSpeaker ? USER : ROLE);
+                var secondDone = new CountDownLatch(1);
+                ai.onResponseCompleted(secondDone::countDown);
                 listener.onMessageReceived(second.messageEvent);
-                assertTrue(throttled.await(5, TimeUnit.SECONDS));
+                assertTrue((linkedSpeaker ? secondDone : throttled).await(5, TimeUnit.SECONDS));
             }
-            verify(transport, times(1)).respond(
+            verify(transport, times(linkedSpeaker ? 2 : 1)).respond(
                 anyString(),
                 anyString(),
                 anyString(),
@@ -502,7 +587,11 @@ class AiConversationTest {
                 }),
                 any(OpenAiTransport.Progress.class)
             );
-            verify(second.message).reply(contains("60秒"));
+            if(linkedSpeaker) {
+                verify(second.message, never()).reply(contains("60秒"));
+            } else {
+                verify(second.message).reply(contains("60秒"));
+            }
         }
     }
 
@@ -780,8 +869,14 @@ class AiConversationTest {
         assertEquals(captor.getValue().getFirst(), history.load(key).turns.getFirst());
     }
 
-    @Test
-    void bundledForwardSourceContextReachesProviderButIsNotPersisted() throws Exception {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.CsvSource({
+        "false, false, false", "true, false, false", "false, true, false",
+        "false, false, true", "true, false, true", "false, true, true"
+    })
+    void bundledForwardSourceContextReachesProviderButIsNotPersisted(
+        boolean forwardFirst, boolean inlineNote, boolean omittedGuild
+    ) throws Exception {
         var captured = new AtomicReference<List<Map<String, Object>>>();
         var transport = mock(OpenAiTransport.class);
         when(
@@ -809,9 +904,106 @@ class AiConversationTest {
             List.of(ForwardSourceContextTest.post(101, "後の結論"))
         );
         String guildId = note.guild.getId();
-        when(source.ref.getGuildId()).thenReturn(guildId);
-        when(forwarded.message.getMessageSnapshots()).thenReturn(List.of(MessageInputTest.snapshot("転送コピー")));
+        when(source.ref.getGuildId()).thenReturn(omittedGuild ? "0" : guildId);
+        var snapshot = MessageInputTest.snapshot("転送コピー");
+        when(forwarded.message.getMessageSnapshots()).thenReturn(List.of(snapshot));
         when(forwarded.message.getMessageReference()).thenReturn(source.ref);
+        if (inlineNote) {
+            when(note.message.getMessageSnapshots()).thenReturn(List.of(snapshot));
+            when(note.message.getMessageReference()).thenReturn(source.ref);
+        }
+        when(note.guild.getGuildChannelById("channel")).thenReturn(source.channel);
+        when(note.guild.getSelfMember()).thenReturn(source.bot);
+        when(
+            note.messageEvent.getMember().hasPermission(
+                source.channel,
+                net.dv8tion.jda.api.Permission.VIEW_CHANNEL,
+                net.dv8tion.jda.api.Permission.MESSAGE_HISTORY
+            )
+        ).thenReturn(true);
+        var done = new CountDownLatch(1);
+        doAnswer(
+            i -> {
+                done.countDown();
+                return null;
+            }
+        ).when(note.reply).queue(any(), any());
+        var history = new ChatHistory(directory.resolve("history"));
+        try (var accounts = new ChatGptAccounts(directory.resolve("auth"));
+            var session = new ChatGptSession(accounts, transport, 0)) {
+            account(accounts);
+            try (var ai = new AiConversation(
+                new AiAccess(directory, ROLE),
+                note.controls,
+                session,
+                transport,
+                new ResponseSettings(directory.resolve("mode.properties")),
+                history,
+                "guide"
+            )) {
+                var listener = new GvdListener(note.controls, ai);
+                if (inlineNote) {
+                    listener.onMessageReceived(note.messageEvent);
+                } else {
+                    listener.onMessageReceived((forwardFirst ? forwarded : note).messageEvent);
+                    listener.onMessageReceived((forwardFirst ? note : forwarded).messageEvent);
+                }
+                assertTrue(done.await(5, TimeUnit.SECONDS));
+            }
+        }
+        verify(transport).respond(
+            eq("access"),
+            eq("chosen"),
+            anyString(),
+            anyList(),
+            any(OpenAiTransport.Progress.class)
+        );
+        String json = ChatGptAccounts.JSON.writeValueAsString(captured.get());
+        assertTrue(json.contains("説明して"));
+        assertTrue(json.contains("転送コピー"));
+        assertTrue(json.contains("前の相談"));
+        assertTrue(json.contains("後の結論"));
+        String key = ChannelControlsTest.CHANNEL +
+            "-" +
+            UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        String persisted = ChatGptAccounts.JSON.writeValueAsString(history.load(key).turns);
+        assertTrue(persisted.contains("転送コピー"));
+        assertFalse(persisted.contains("前の相談"));
+        verify(note.message).reply("answer");
+    }
+
+    @Test
+    void replyNeighborhoodReachesProviderButIsNotPersisted() throws Exception {
+        var captured = new AtomicReference<List<Map<String, Object>>>();
+        var transport = mock(OpenAiTransport.class);
+        when(
+            transport.respond(
+                anyString(),
+                anyString(),
+                anyString(),
+                anyList(),
+                any(OpenAiTransport.Progress.class)
+            )
+        ).thenAnswer(
+            i -> {
+                captured.set(List.copyOf(i.getArgument(3)));
+                return "answer";
+            }
+        );
+        var note = event(USER, true, "note-context", "説明して");
+        var source = new ForwardSourceContextTest();
+        source.source(
+            ForwardSourceContextTest.post(100, "元の資料"),
+            List.of(ForwardSourceContextTest.post(99, "前の相談")),
+            List.of(ForwardSourceContextTest.post(101, "後の結論"))
+        );
+        when(note.message.getType()).thenReturn(net.dv8tion.jda.api.entities.MessageType.INLINE_REPLY);
+        when(note.message.getChannelId()).thenReturn("channel");
+        var jda = note.messageEvent.getJDA();
+        when(note.message.getJDA()).thenReturn(jda);
+        when(note.message.getMessageReference()).thenReturn(source.ref);
+        var target = ForwardSourceContextTest.post(100, "元の資料");
+        when(note.message.getReferencedMessage()).thenReturn(target);
         when(note.guild.getGuildChannelById("channel")).thenReturn(source.channel);
         when(note.guild.getSelfMember()).thenReturn(source.bot);
         when(
@@ -842,7 +1034,6 @@ class AiConversationTest {
                 "guide"
             )) {
                 ai.accept(note.messageEvent);
-                ai.accept(forwarded.messageEvent);
                 assertTrue(done.await(5, TimeUnit.SECONDS));
             }
         }
@@ -855,14 +1046,14 @@ class AiConversationTest {
         );
         String json = ChatGptAccounts.JSON.writeValueAsString(captured.get());
         assertTrue(json.contains("説明して"));
-        assertTrue(json.contains("転送コピー"));
+        assertTrue(json.contains("返信先の前後コンテキスト"));
         assertTrue(json.contains("前の相談"));
         assertTrue(json.contains("後の結論"));
         String key = ChannelControlsTest.CHANNEL +
             "-" +
             UUID.nameUUIDFromBytes("oaiapp_shared:owner".getBytes(java.nio.charset.StandardCharsets.UTF_8));
         String persisted = ChatGptAccounts.JSON.writeValueAsString(history.load(key).turns);
-        assertTrue(persisted.contains("転送コピー"));
+        assertFalse(persisted.contains("返信先の前後コンテキスト"));
         assertFalse(persisted.contains("前の相談"));
         verify(note.message).reply("answer");
     }
